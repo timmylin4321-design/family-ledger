@@ -1398,6 +1398,7 @@ function initCloud(){
   cloud.db.enablePersistence({ synchronizeTabs:true }).catch(() => {});
   firebase.auth().getRedirectResult().catch(cloudErr);
   firebase.auth().onAuthStateChanged(u => {
+    cloud.authKnown = true;
     cloud.user = u; cloud.msg = "";
     if (!u){ stopSync(); cloud.ledger = null; cloud.list = []; renderCloud(); return; }
     cloud.showLogin = false;
@@ -1533,11 +1534,24 @@ $("quickInput").addEventListener("input", updateQuick);
 $("quickInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing){ e.preventDefault(); goQuick(); } });
 $("quickGo").onclick = goQuick;
 (() => {
-  const q = new URLSearchParams(location.search).get("q");
+  const qs = new URLSearchParams(location.search), q = qs.get("q");
   if (!q) return;
   $("quickInput").value = q;
   try { history.replaceState(null, "", location.pathname + location.hash); } catch {}
-  setTimeout(() => { updateQuick(); $("quickInput").focus(); }, 0);
+  const auto = qs.get("auto") === "1";
+  if (!auto){ setTimeout(() => { updateQuick(); $("quickInput").focus(); }, 0); return; }
+  // 捷徑用 auto=1：等雲端登入狀態確定、資料載入後自動記下
+  const tryAuto = n => {
+    const done = document.readyState === "complete" && (!cloud.on || (cloud.authKnown && (!cloud.user || cloud.ready)));
+    if (!done && n < 60) return setTimeout(() => tryAuto(n + 1), 250);
+    updateQuick();
+    const p = parseQuick($("quickInput").value);
+    const m = $("quickMsg");
+    if (cloud.on && !cloud.user){ m.hidden = false; m.textContent = "還沒登入雲端，先登入後再按「記下」，資料才會同步。"; return; }
+    if (!p || !(p.amount > 0)){ m.hidden = false; m.textContent = "沒有讀到金額，請補上後按「記下」。"; $("quickInput").focus(); return; }
+    goQuick();
+  };
+  tryAuto(0);
 })();
 
 /* ---------- boot ---------- */
