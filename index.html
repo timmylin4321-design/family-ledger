@@ -287,7 +287,7 @@ tfoot td{font-weight:700;background:var(--bg)}
           <button type="button" class="tr" data-type="transfer" aria-pressed="false">轉帳</button>
         </div>
         <label class="amount"><span>NT$</span><input id="amount" type="text" inputmode="decimal" placeholder="0" aria-label="金額" autocomplete="off"><span class="calcpreview" id="calcPreview"></span></label>
-        <div class="calcpad" id="calcPad" hidden>
+        <div class="calcpad" id="calcPad">
           <button type="button" class="fn" data-k="C">C</button>
           <button type="button" class="fn" data-k="(">(</button>
           <button type="button" class="fn" data-k=")">)</button>
@@ -617,7 +617,14 @@ function updateCalcPreview(){
 const coarse = matchMedia("(pointer: coarse)").matches;
 if (coarse) $("amount").setAttribute("inputmode","none");
 $("amount").addEventListener("focus", () => { $("calcPad").hidden = false; });
-$("amount").addEventListener("blur", () => { setTimeout(() => { if (document.activeElement !== $("amount")) $("calcPad").hidden = true; }, 150); });
+/* 金額欄一律用錢的格式顯示（千分位），計算機鍵盤一直顯示，輸入前就能直接按 */
+function fmtExpr(v){
+  return String(v).replace(/[\d,]+(\.\d*)?/g, m => {
+    const [i, d] = m.replace(/,/g, "").split(".");
+    return i.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (d !== undefined ? "." + d : "");
+  });
+}
+$("amount").addEventListener("blur", () => { const f = fmtExpr($("amount").value); if (f !== $("amount").value){ $("amount").value = f; updateCalcPreview(); } });
 $("amount").addEventListener("input", updateCalcPreview);
 $("note").addEventListener("input", renderNoteChips);
 $("amount").addEventListener("keydown", e => { if (e.key==="=" ){ e.preventDefault(); calcKey("="); } });
@@ -628,12 +635,12 @@ function calcKey(k){
   else if (k==="="){
     const t = v.replace(/[+\-*/×÷−.]+$/,""), n = calcEval(t);
     if (hasOp(t) && isFinite(n)) v = String(n);
-    else if (parseAmount(t) > 0){ inp.value = t; updateCalcPreview(); syncSubmit(); $("calcPad").hidden = true; inp.blur(); $("submit").click(); return; }
+    else if (parseAmount(t) > 0){ inp.value = fmtExpr(t); updateCalcPreview(); syncSubmit(); $("submit").click(); return; }
     else { flash("請先輸入金額", true); return; }
   }
   else if ("+-*/".includes(k)){ v = v.replace(/[+\-*/×÷−]$/,"") + (k==="*"?"×":k==="/"?"÷":k); if (v==="×"||v==="÷"||v==="+") v=""; }
   else v += k;
-  inp.value = v; updateCalcPreview(); syncSubmit();
+  inp.value = fmtExpr(v); updateCalcPreview(); syncSubmit();
 }
 $("calcPad").addEventListener("pointerdown", e => { if (e.target.closest("button")) e.preventDefault(); });
 $("calcPad").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; calcKey(b.dataset.k); $("amount").focus({preventScroll:true}); });
@@ -679,7 +686,7 @@ function startEdit(x){
   editId = x.id; cat = x.category;
   $("fAcc").value = x.account; if (x.toAccount) $("fTo").value = x.toAccount;
   setType(x.type);
-  $("amount").value = x.amount; $("date").value = x.date; $("note").value = x.note || ""; renderNoteChips();
+  $("amount").value = fmtExpr(String(x.amount)); updateCalcPreview(); $("date").value = x.date; $("note").value = x.note || ""; renderNoteChips();
   $("formTitle").textContent="編輯紀錄"; $("submit").textContent="更新"; $("cancelEdit").hidden=false;
   syncSubmit(); showTab("ledger");
   $("form").scrollIntoView({behavior:"smooth",block:"start"}); $("amount").focus({preventScroll:true});
