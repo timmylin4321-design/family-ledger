@@ -110,6 +110,21 @@ input[type=date],input[type=text],input[type=number],select{font:inherit;color:v
 .ghost{background:transparent;border:1px solid var(--line);border-radius:8px;padding:8px 14px}
 .small{padding:5px 12px;font-size:.85rem}
 .formmsg{font-size:.85rem;color:var(--muted);margin-right:auto}
+.quick{padding:12px 14px;display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+.quickrow{display:flex;gap:8px}
+.quickrow input{flex:1 1 auto;font-size:1rem!important}
+.quickrow button{flex:none;white-space:nowrap}
+.quickprev{font-size:.85rem;color:var(--muted);min-height:1.3em;overflow-wrap:anywhere}
+.quickprev b{color:var(--ink);font-weight:500}
+.quickprev .tag{margin-right:4px}
+.quickmsg{font-size:.85rem;color:var(--in);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.quickmsg[hidden]{display:none}
+.favs{gap:6px}
+.favs .chip{display:inline-flex;gap:6px;align-items:baseline;padding:5px 12px}
+.favs .chip .a{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.favs .chip.out .a{color:var(--out)} .favs .chip.in .a{color:var(--in)}
+.favs .chip small{color:var(--muted);font-size:.72rem}
+.favlabel{font-size:.75rem;color:var(--muted);letter-spacing:.08em}
 
 .cats{padding:14px 16px;display:flex;flex-direction:column;gap:9px}
 .cat{display:grid;grid-template-columns:4.5em 1fr auto;gap:10px;align-items:center;font-size:.9rem}
@@ -253,6 +268,17 @@ tfoot td{font-weight:700;background:var(--bg)}
     <div class="status" id="fixedHint" hidden></div>
 
     <section>
+      <h2>快速記帳</h2>
+      <div class="panel quick">
+        <div class="quickrow">
+          <input type="text" id="quickInput" placeholder="例：午餐 120、加油 1500 遠東" enterkeyhint="done" autocomplete="off" aria-label="一句話記帳">
+          <button type="button" class="primary small" id="quickGo" disabled>記下</button>
+        </div>
+        <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。</div>
+        <div class="quickmsg" id="quickMsg" hidden></div>
+        <div class="favlabel">常用（點一下直接記）</div>
+        <div class="chips favs" id="favChips"></div>
+      </div>
       <h2 id="formTitle">記一筆</h2>
       <form class="panel" id="form" autocomplete="off">
         <div class="seg" role="group" aria-label="收支類型">
@@ -546,7 +572,7 @@ function renderChips(){
   for (const c of CATS[type]) {
     const b = el("button",{type:"button",className:"chip",textContent:c});
     b.setAttribute("aria-pressed", String(c===cat));
-    b.onclick = () => { cat=c; renderChips(); };
+    b.onclick = () => { cat=c; const a = accFor(c); if (a && !editId) $("fAcc").value = a; renderChips(); };
     box.appendChild(b);
   }
 }
@@ -639,6 +665,7 @@ $("form").addEventListener("submit", e => {
     flash("已更新");
   } else {
     S.entries.push({ id:uid(), ...body, createdAt:Date.now() });
+    if (type!=="transfer") rememberAcc(cat, from);
     flash(type==="transfer" ? `已記下轉帳 NT$${fmt(amount)}` : `已記下 ${cat} NT$${fmt(amount)}`);
   }
   persist();
@@ -900,7 +927,7 @@ function renderAll(){
   fillAccSelect($("fAcc")); fillAccSelect($("fTo")); fillAccSelect($("fxAcc")); fillAccSelect($("filterAcc"), "全部帳戶");
   if (filterAcc && !acc(filterAcc)) filterAcc="";
   $("filterAcc").value = filterAcc;
-  renderLedger(); renderAccounts(); renderFixed(); renderCharts();
+  renderLedger(); renderAccounts(); renderFixed(); renderCharts(); renderFavs();
 }
 
 /* ---------- CSV ---------- */
@@ -1373,6 +1400,138 @@ function initCloud(){
   addEventListener("online", renderCloud); addEventListener("offline", renderCloud);
   renderCloud();
 }
+
+/* ---------- 快速記帳：記住帳戶、常用組合、一句話輸入、Siri 捷徑 ---------- */
+const LAST_ACC_KEY = KEY + "-lastacc";
+let lastAcc = {};
+try { lastAcc = JSON.parse(localStorage.getItem(LAST_ACC_KEY) || "{}") || {}; } catch {}
+function rememberAcc(category, account){ lastAcc[category] = account; try { localStorage.setItem(LAST_ACC_KEY, JSON.stringify(lastAcc)); } catch {} }
+function accFor(category){ const a = lastAcc[category]; return acc(a) ? a : null; }
+const shiftDay = n => { const d = new Date(); d.setDate(d.getDate()+n); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+
+function quickAdd(e){
+  const x = { id:uid(), ...e, createdAt:Date.now() };
+  S.entries.push(x); rememberAcc(e.category, e.account); persist();
+  const d = e.date.split("-"); ym = {y:+d[0], m:+d[1]}; renderAll();
+  const m = $("quickMsg"); m.textContent = ""; m.hidden = false;
+  const undo = el("button",{type:"button",className:"linkbtn",textContent:"復原"});
+  undo.onclick = () => { S.entries = S.entries.filter(y => y.id !== x.id); persist(); renderAll(); m.textContent = "已復原"; setTimeout(() => { m.hidden = true; }, 2500); };
+  m.append(`✓ 已記下 ${e.category}${e.note ? "・"+e.note : ""}・${accName(e.account)} NT$${fmt(e.amount)}`, undo);
+  clearTimeout(quickAdd.t); quickAdd.t = setTimeout(() => { m.hidden = true; }, 8000);
+}
+
+function favCombos(){
+  const since = shiftDay(-180), m = new Map();
+  for (const x of S.entries){
+    if ((x.type!=="in" && x.type!=="out") || x.manual || !(x.amount>0) || x.date < since) continue;
+    if (S.fixed.some(f => f.category===x.category && +f.amount===x.amount)) continue;   // 固定收支另外處理
+    const k = [x.type, x.category, x.note||"", x.account, x.amount].join("|");
+    const o = m.get(k) || { x, n:0, last:"" }; o.n++;
+    if (x.date >= o.last){ o.last = x.date; o.x = x; }
+    m.set(k, o);
+  }
+  return [...m.values()].filter(o => o.n >= 2).sort((a,b) => b.n - a.n || b.last.localeCompare(a.last)).slice(0, 8);
+}
+function renderFavs(){
+  const box = $("favChips"); box.textContent = "";
+  const list = favCombos();
+  if (!list.length) box.append(el("span",{className:"quickprev",textContent:"同樣的項目記兩次以上，就會自動出現在這裡。"}));
+  for (const {x} of list){
+    const b = el("button",{type:"button",className:"chip "+(x.type==="in"?"in":"out"),title:`${x.category}・${accName(x.account)}`});
+    b.append(el("span",{textContent:x.note || x.category}), el("span",{className:"a",textContent:(x.type==="in"?"+":"")+fmt(x.amount)}), el("small",{textContent:accName(x.account).replace(/（.*$/,"")}));
+    b.onclick = () => quickAdd({ type:x.type, category:x.category, amount:x.amount, account: acc(x.account) ? x.account : S.accounts[0].id, note:x.note||"", date:today() });
+    box.append(b);
+  }
+  if ($("quickInput").value.trim()) updateQuick();
+}
+
+const OUT_KW = [
+  [/早餐|午餐|晚餐|宵夜|便當|飲料|咖啡|聚餐|外送|點心|下午茶/, "餐飲"],
+  [/加油|保養|停車|捷運|高鐵|台鐵|火車|公車|計程車|uber|etag|過路費|洗車|機車/i, "交通"],
+  [/水費|電費|瓦斯/, "水電瓦斯"],
+  [/全聯|好市多|costco|家樂福|衛生紙|洗衣精|超商|7-?11|全家/i, "日用品"],
+  [/電話費|網路費|中華電信|手機費|電信/, "電信網路"],
+  [/看診|掛號|藥|醫院|診所|牙醫|化療/, "醫療"],
+  [/房租|房貸/, "房租房貸"],
+  [/保費|保險/, "保險"],
+  [/電影|旅遊|ktv|門票|遊樂/i, "娛樂"],
+  [/飼料|寵物|豆豆|獸醫/, "寵物"],
+  [/學費|補習|書/, "教育"],
+  [/孝親|紅包|家用/, "孝親"],
+  [/卡費/, "信用卡費"],
+  [/定期定額|買股|基金/, "投資理財"]
+];
+const IN_KW = [[/薪水|薪資/, "薪資"], [/獎金|年終/, "獎金"], [/利息/, "利息"], [/退款|退費/, "退款"], [/股利|配息/, "投資"]];
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function parseQuick(text){
+  let s = " " + String(text).trim() + " ";
+  if (!s.trim()) return null;
+  let date = today();
+  if (/昨天/.test(s)){ date = shiftDay(-1); s = s.replace(/昨天/g, " "); }
+  else if (/前天/.test(s)){ date = shiftDay(-2); s = s.replace(/前天/g, " "); }
+  s = s.replace(/NT\$|\$/gi, " ");
+  const nums = [...s.matchAll(/\d[\d,.]*(?:\s*[+\-*/×÷]\s*\d[\d,.]*)*/g)];
+  const m = nums.pop();
+  const amount = m ? calcEval(m[0]) : NaN;
+  if (m) s = s.slice(0, m.index) + " " + s.slice(m.index + m[0].length);
+  s = s.replace(/(^|\s)(元|塊)(?=\s|$)/g, " ");
+  let account = null;
+  const cands = [];
+  for (const a of S.accounts){
+    const core = a.name.replace(/[（(].*$/, "").trim();
+    for (const c of [a.name, core, core.replace(/(銀行|商銀)$/, "")]) if (c && c.length >= 2) cands.push([c, a.id]);
+  }
+  cands.sort((x,y) => y[0].length - x[0].length);
+  for (const [c, id] of cands){
+    const re = new RegExp(esc(c), "i");
+    if (re.test(s)){ account = id; s = s.replace(re, " "); break; }
+  }
+  let note = s.replace(/\s+/g, " ").trim(), type = "out", category = null;
+  for (const [t, list] of [["out", CATS.out], ["in", CATS.in]]){
+    for (const c of list) if (note === c || note.startsWith(c + " ")){ type = t; category = c; note = note.slice(c.length).trim(); break; }
+    if (category) break;
+  }
+  if (!category) for (const [re, c] of IN_KW) if (re.test(note)){ type = "in"; category = c; break; }
+  if (!category) for (const [re, c] of OUT_KW) if (re.test(note)){ category = c; break; }
+  if (!category && note){
+    const h = S.entries.filter(x => (x.type==="in"||x.type==="out") && x.note && (x.note===note || x.note.startsWith(note))).slice(-30);
+    if (h.length){
+      const cnt = {}; for (const x of h){ const k = x.type+"|"+x.category; cnt[k] = (cnt[k]||0) + 1; }
+      [type, category] = Object.entries(cnt).sort((a,b) => b[1]-a[1])[0][0].split("|");
+    }
+  }
+  if (!category) category = "其他";
+  if (!account) account = accFor(category) || $("fAcc").value || S.accounts[0].id;
+  return { type, category, note, account, amount, date };
+}
+function updateQuick(){
+  const p = parseQuick($("quickInput").value), box = $("quickPrev");
+  box.textContent = "";
+  $("quickGo").disabled = !(p && p.amount > 0);
+  if (!p){ box.textContent = "可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。"; return; }
+  box.append(
+    el("span",{className:"tag "+(p.type==="in"?"in":"out"),textContent:p.type==="in"?"收入":"支出"}),
+    el("b",{textContent:p.category}), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
+    el("b",{textContent: p.amount > 0 ? "NT$"+fmt(p.amount) : "（還沒有金額）"}),
+    p.date !== today() ? `・${+p.date.slice(5,7)}/${+p.date.slice(8)}` : ""
+  );
+}
+function goQuick(){
+  const p = parseQuick($("quickInput").value);
+  if (!p || !(p.amount > 0)) return;
+  quickAdd(p); $("quickInput").value = ""; updateQuick();
+}
+$("quickInput").addEventListener("input", updateQuick);
+$("quickInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing){ e.preventDefault(); goQuick(); } });
+$("quickGo").onclick = goQuick;
+(() => {
+  const q = new URLSearchParams(location.search).get("q");
+  if (!q) return;
+  $("quickInput").value = q;
+  try { history.replaceState(null, "", location.pathname + location.hash); } catch {}
+  setTimeout(() => { updateQuick(); $("quickInput").focus(); }, 0);
+})();
 
 /* ---------- boot ---------- */
 setType("out"); setFxType("out"); renderAll(); showTab(location.hash.slice(1));
