@@ -91,11 +91,14 @@ form.panel{padding:16px;display:flex;flex-direction:column;gap:12px}
 .calcpad button.fn{color:var(--muted);font-size:1rem}
 .calcpad button{-webkit-tap-highlight-color:transparent}
 .calcpad button[data-k="BS"]{font-size:1.3rem}
-.calcpad button.eq{background:var(--accent);color:var(--paper);border-color:var(--accent);font-weight:700}
+.calcpad button.eq{background:var(--accent);color:var(--paper);border-color:var(--accent);font-weight:700;font-family:var(--f-body)}
 .calchint{font-size:.75rem;color:var(--muted)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{border:1px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;font-size:.9rem}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--paper)}
+.field>.flabel{font-size:.75rem;color:var(--muted);letter-spacing:.08em}
+.notechips{margin-top:6px}
+.notechips .chip{font-size:.85rem;padding:3px 12px}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
 .field>span{font-size:.75rem;color:var(--muted);letter-spacing:.08em}
@@ -271,14 +274,14 @@ tfoot td{font-weight:700;background:var(--bg)}
           <button type="button" class="op" data-k="+">+</button>
           <button type="button" data-k="0">0</button><button type="button" data-k=".">.</button>
           <button type="button" class="fn" data-k="BS" aria-label="刪除一個字">⌫</button>
-          <button type="button" class="eq" data-k="=">=</button>
+          <button type="button" class="eq" data-k="=">記下</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="分類"></div>
         <div class="fields">
           <label class="field"><span id="accLabel">帳戶</span><select id="fAcc"></select></label>
           <label class="field" id="toWrap" hidden><span>轉入帳戶</span><select id="fTo"></select></label>
           <label class="field"><span>日期</span><input type="date" id="date"></label>
-          <label class="field wide"><span>備註</span><input type="text" id="note" maxlength="60" placeholder="選填，例：全聯買菜"></label>
+          <div class="field wide"><label for="note" class="flabel">備註</label><input type="text" id="note" maxlength="60" placeholder="選填，例：全聯買菜"><div class="chips notechips" id="noteChips" role="group" aria-label="常用備註" hidden></div></div>
         </div>
         <div class="actions">
           <span class="formmsg" id="formMsg"></span>
@@ -511,9 +514,34 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { histo
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
 /* ---------- entry form ---------- */
+/* 各分類的常用備註，點一下就填入 */
+const NOTE_PRESETS = {
+  "餐飲": ["早餐","午餐","晚餐"],
+  "交通": ["加油","保養"],
+  "水電瓦斯": ["水費","電費","瓦斯費"]
+};
+function renderNoteChips(){
+  const box = $("noteChips"); box.textContent = "";
+  const list = type==="transfer" ? null : NOTE_PRESETS[cat];
+  box.hidden = !list;
+  if (!list) return;
+  const cur = $("note").value.trim();
+  for (const t of list){
+    const b = el("button",{type:"button",className:"chip",textContent:t});
+    b.setAttribute("aria-pressed", String(cur===t || cur.startsWith(t+" ")));
+    b.onclick = () => {
+      const n = $("note"), v = n.value.trim();
+      const rest = list.reduce((s,p) => s===p ? "" : s.startsWith(p+" ") ? s.slice(p.length+1) : s, v);
+      n.value = (v===t || v.startsWith(t+" ")) ? rest : (rest ? t+" "+rest : t);
+      renderNoteChips();
+    };
+    box.append(b);
+  }
+}
 function renderChips(){
   const box = $("chips"); box.textContent = "";
   box.hidden = type==="transfer";
+  renderNoteChips();
   if (type==="transfer") return;
   for (const c of CATS[type]) {
     const b = el("button",{type:"button",className:"chip",textContent:c});
@@ -557,18 +585,26 @@ function parseAmount(v){ const n = calcEval(v); return isFinite(n) && n>0 ? n : 
 function updateCalcPreview(){
   const v = $("amount").value, n = calcEval(v);
   $("calcPreview").textContent = hasOp(v) && isFinite(n) ? "= " + fmt(n) : "";
+  const eq = document.querySelector('#calcPad [data-k="="]');
+  if (eq) eq.textContent = hasOp(v.replace(/[+\-*/×÷−.]+$/,"")) ? "=" : "記下";
 }
 const coarse = matchMedia("(pointer: coarse)").matches;
 if (coarse) $("amount").setAttribute("inputmode","none");
 $("amount").addEventListener("focus", () => { $("calcPad").hidden = false; });
 $("amount").addEventListener("blur", () => { setTimeout(() => { if (document.activeElement !== $("amount")) $("calcPad").hidden = true; }, 150); });
 $("amount").addEventListener("input", updateCalcPreview);
+$("note").addEventListener("input", renderNoteChips);
 $("amount").addEventListener("keydown", e => { if (e.key==="=" ){ e.preventDefault(); calcKey("="); } });
 function calcKey(k){
   const inp = $("amount"); let v = inp.value;
   if (k==="C") v = "";
   else if (k==="BS") v = v.slice(0,-1);
-  else if (k==="="){ const n = calcEval(v); if (isFinite(n)) v = String(n); }
+  else if (k==="="){
+    const t = v.replace(/[+\-*/×÷−.]+$/,""), n = calcEval(t);
+    if (hasOp(t) && isFinite(n)) v = String(n);
+    else if (parseAmount(t) > 0){ inp.value = t; updateCalcPreview(); syncSubmit(); $("calcPad").hidden = true; inp.blur(); $("submit").click(); return; }
+    else { flash("請先輸入金額", true); return; }
+  }
   else if ("+-*/".includes(k)){ v = v.replace(/[+\-*/×÷−]$/,"") + (k==="*"?"×":k==="/"?"÷":k); if (v==="×"||v==="÷"||v==="+") v=""; }
   else v += k;
   inp.value = v; updateCalcPreview(); syncSubmit();
@@ -579,7 +615,7 @@ function syncSubmit(){ $("submit").disabled = !parseAmount($("amount").value); }
 $("amount").addEventListener("input", syncSubmit);
 
 function resetForm(){
-  editId=null; $("amount").value=""; $("note").value=""; $("calcPreview").textContent="";
+  editId=null; $("amount").value=""; $("note").value=""; updateCalcPreview(); renderNoteChips();
   $("formTitle").textContent="記一筆"; $("submit").textContent="記下"; $("cancelEdit").hidden=true;
   syncSubmit();
 }
@@ -616,7 +652,7 @@ function startEdit(x){
   editId = x.id; cat = x.category;
   $("fAcc").value = x.account; if (x.toAccount) $("fTo").value = x.toAccount;
   setType(x.type);
-  $("amount").value = x.amount; $("date").value = x.date; $("note").value = x.note || "";
+  $("amount").value = x.amount; $("date").value = x.date; $("note").value = x.note || ""; renderNoteChips();
   $("formTitle").textContent="編輯紀錄"; $("submit").textContent="更新"; $("cancelEdit").hidden=false;
   syncSubmit(); showTab("ledger");
   $("form").scrollIntoView({behavior:"smooth",block:"start"}); $("amount").focus({preventScroll:true});
