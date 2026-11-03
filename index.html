@@ -78,6 +78,10 @@ form.panel{padding:16px;display:flex;flex-direction:column;gap:12px}
 .seg button[aria-pressed="true"].out{background:var(--out-soft);color:var(--out);font-weight:700}
 .seg button[aria-pressed="true"].in{background:var(--in-soft);color:var(--in);font-weight:700}
 .seg button[aria-pressed="true"].tr{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.rangebar{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.rangecustom{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;font-size:.9rem;color:var(--muted)}
+.rangecustom{flex-wrap:nowrap}
+.rangecustom input{width:9.4em;min-width:0;flex:0 1 auto;padding:6px 6px;font-size:.9rem}
 .amount{display:flex;align-items:baseline;gap:8px;border-bottom:2px solid var(--line);padding-bottom:4px}
 .amount span{font-family:var(--f-num);color:var(--muted)}
 .amount input{border:0;background:transparent;font-family:var(--f-num);font-size:2rem;width:100%;min-width:0;color:var(--ink);padding:0}
@@ -404,10 +408,16 @@ tfoot td{font-weight:700;background:var(--bg)}
       <div><div class="k" id="kAvgK">月平均支出</div><div class="v" id="kAvg">0</div><div class="d" id="kAvgD"></div></div>
       <div><div class="k">固定支出佔比</div><div class="v" id="kFix">—</div><div class="d" id="kFixD"></div></div>
     </div>
-    <div style="display:flex;justify-content:flex-end">
+    <div class="rangebar">
       <div class="seg" role="group" aria-label="期間">
         <button type="button" class="tr" data-range="6" aria-pressed="false">近 6 個月</button>
         <button type="button" class="tr" data-range="12" aria-pressed="true">近 12 個月</button>
+        <button type="button" class="tr" data-range="custom" aria-pressed="false">自訂</button>
+      </div>
+      <div class="rangecustom" id="rangeCustom" hidden>
+        <input type="month" id="rangeFrom" aria-label="起始月份">
+        <span>至</span>
+        <input type="month" id="rangeTo" aria-label="結束月份">
       </div>
     </div>
     <section>
@@ -1127,12 +1137,44 @@ $("importFile").onchange = async e => {
 };
 
 /* ---------- 圖表 ---------- */
-let charts = {}, range = 12;
+let charts = {}, range = 12, rangeMode = "12", rangeLabel = "近 12 個月";
+const RANGE_KEY = "family-ledger-range";
+let customRange = (() => { try { return JSON.parse(localStorage.getItem(RANGE_KEY)||"null"); } catch { return null; } })();
+if (customRange && customRange.mode){ rangeMode = customRange.mode; }
+function saveRange(){ try { localStorage.setItem(RANGE_KEY, JSON.stringify({mode:rangeMode, from:$("rangeFrom").value, to:$("rangeTo").value})); } catch {} }
+function syncRangeUI(){
+  document.querySelectorAll("[data-range]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.range===rangeMode)));
+  $("rangeCustom").hidden = rangeMode !== "custom";
+}
+/* 圖表期間：近 N 個月（以目前選的月份為結尾）或自訂起訖月份 */
+function rangeMonths(){
+  if (rangeMode !== "custom"){
+    range = +rangeMode; rangeLabel = `近 ${range} 個月 `;
+    return monthsBack(range);
+  }
+  let f = $("rangeFrom").value, t = $("rangeTo").value;
+  const curKey = `${ym.y}-${pad(ym.m)}`;
+  if (!t) t = curKey;
+  if (!f){ const b = monthsBack(12)[0]; f = b.key; }
+  if (f > t) [f, t] = [t, f];
+  const out = []; let [y, m] = f.split("-").map(Number);
+  while (`${y}-${pad(m)}` <= t && out.length < 120){ out.push({y, m, key:`${y}-${pad(m)}`}); m++; if (m>12){ m=1; y++; } }
+  range = out.length;
+  const [ty, tm] = t.split("-").map(Number);
+  rangeLabel = `${out[0].y}/${out[0].m}–${ty}/${tm}`;
+  return out;
+}
 document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => {
-  range = +b.dataset.range;
-  document.querySelectorAll("[data-range]").forEach(x => x.setAttribute("aria-pressed", String(x===b)));
-  renderCharts();
+  rangeMode = b.dataset.range;
+  if (rangeMode === "custom"){
+    if (!$("rangeTo").value) $("rangeTo").value = `${ym.y}-${pad(ym.m)}`;
+    if (!$("rangeFrom").value) $("rangeFrom").value = monthsBack(12)[0].key;
+  }
+  syncRangeUI(); saveRange(); renderCharts();
 });
+["rangeFrom","rangeTo"].forEach(id => $(id).addEventListener("change", () => { saveRange(); renderCharts(); }));
+if (customRange){ if (customRange.from) $("rangeFrom").value = customRange.from; if (customRange.to) $("rangeTo").value = customRange.to; }
+syncRangeUI();
 const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const isDark = () => getComputedStyle(document.documentElement).colorScheme.includes("dark");
 const PAL_L = ["#1f6b5c","#c2412d","#2f6fb0","#b7791f","#7a4fb5","#2a7a3f","#c0397a","#4b8794","#8a6d3b","#5d6b2f","#a0522d","#3d5a99","#9c4f7a","#6b7f2a","#d0662f","#2b8a8a","#8e44ad","#46637f","#6f7a77"];
@@ -1184,8 +1226,8 @@ function renderCharts(){
 
   /* KPI */
   const key = ymKey(), cur = monthTotals(key);
-  const ms = monthsBack(range);
-  const prevKey = ms.length>1 ? ms[ms.length-2].key : null;
+  const ms = rangeMonths();
+  const prevKey = monthsBack(2)[0].key;
   const prev = prevKey ? monthTotals(prevKey) : {tin:0,tout:0};
   const pct = (a,b) => `比上月 ${a>=b?"+":"−"}${Math.abs(Math.round((a-b)/b*100))}%`;
   $("kIn").textContent = fmt(cur.tin);
@@ -1198,10 +1240,11 @@ function renderCharts(){
   const active = totals.filter(t => t.tin || t.tout);
   const avg = active.length ? active.reduce((s,t)=>s+t.tout,0)/active.length : 0;
   const sumIn = totals.reduce((s,t)=>s+t.tin,0), sumOut = totals.reduce((s,t)=>s+t.tout,0);
-  $("kSumInK").textContent = `近 ${range} 個月總收入`;
+  const kLab = rangeMode==="custom" ? "期間" : rangeLabel;
+  $("kSumInK").textContent = `${kLab}總收入`;
   $("kSumIn").textContent = fmt(sumIn);
   $("kSumInD").textContent = `總支出 NT$${fmt(sumOut)} · 結餘 NT$${fmt(sumIn-sumOut)}`;
-  $("kAvgK").textContent = `近 ${range} 個月平均支出`;
+  $("kAvgK").textContent = `${kLab}平均支出`;
   $("kAvg").textContent = fmt(avg);
   $("kAvgD").textContent = active.length ? `以有紀錄的 ${active.length} 個月計` : "尚無資料";
   const fixedOut = S.entries.filter(x=>x.fixedId && x.type==="out" && x.date.startsWith(key)).reduce((s,x)=>s+x.amount,0);
@@ -1274,19 +1317,20 @@ function renderCharts(){
   for (const x of S.entries){
     if (x.type!=="out" || !subCats.has(x.category)) continue;
     const mk = x.date.slice(0,7);
-    if (mk < firstKey || mk > endKey) continue;
+    const inR = mk >= firstKey && mk <= endKey;
+    if (!inR && mk !== key) continue;
     const k = x.category + "|" + (x.sub || "未指定");
     const o = sg.get(k) || { cat:x.category, sub:x.sub||"未指定", cur:0, n:0, total:0 };
-    o.total += x.amount;
+    if (inR) o.total += x.amount;
     if (mk === key){ o.cur += x.amount; o.n++; }
     sg.set(k, o);
   }
-  const subRows = [...sg.values()].filter(o => o.total > 0)
+  const subRows = [...sg.values()].filter(o => o.total > 0 || o.cur > 0)
     .sort((a,b) => a.cat===b.cat ? (b.cur-a.cur || b.total-a.total) : (CATS.out.indexOf(a.cat)-CATS.out.indexOf(b.cat)));
   const hasSub = subRows.some(o => o.sub !== "未指定");
   $("subEmpty").hidden = hasSub; $("subChartBox").hidden = !hasSub; $("subTableBox").hidden = !hasSub;
-  $("subRangeH").textContent = `近${range}月`;
-  $("subHint").textContent = hasSub ? `${ym.y}/${pad(ym.m)}・近 ${range} 個月` : "";
+  $("subRangeH").textContent = rangeMode==="custom" ? "期間合計" : `近${range}月`;
+  $("subHint").textContent = hasSub ? `本月 ${ym.y}/${pad(ym.m)}・${rangeLabel}` : "";
   const body = $("subBody"); body.textContent = "";
   if (hasSub){
     let lastCat = "";
