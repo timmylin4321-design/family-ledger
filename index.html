@@ -282,6 +282,7 @@ tfoot td{font-weight:700;background:var(--bg)}
           <button type="button" class="primary small" id="quickGo" disabled>記下</button>
         </div>
         <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。</div>
+        <div class="chips subchips" id="quickSubs" role="group" aria-label="快速記帳的子類別" hidden></div>
         <div class="quickmsg" id="quickMsg" hidden></div>
         <div class="favlabel">常用（點一下直接記）</div>
         <div class="chips favs" id="favChips"></div>
@@ -1596,24 +1597,57 @@ function parseQuick(text){
   }
   if (!category) category = "其他";
   if (!account) account = accFor(category) || $("fAcc").value || S.accounts[0].id;
-  return { type, category, ...(sub ? {sub} : {}), note, account, amount, date };
+  // 沒寫子類別時，依過去同分類、同備註的紀錄自動帶入最常用的子類別
+  let subAuto = false;
+  if (!sub && subList(category).length){
+    const h = S.entries.filter(x => x.category===category && x.sub && subList(category).includes(x.sub) && (!note || (x.note||"")===note)).slice(-30);
+    const pool = (h.length || note) ? h : S.entries.filter(x => x.category===category && x.sub && subList(category).includes(x.sub)).slice(-30);
+    if (pool.length){
+      const cnt = {}; for (const x of pool) cnt[x.sub] = (cnt[x.sub]||0) + 1;
+      sub = Object.entries(cnt).sort((a,b) => b[1]-a[1])[0][0]; subAuto = true;
+    }
+  }
+  return { type, category, ...(sub ? {sub} : {}), subAuto, note, account, amount, date };
+}
+let quickSub = null, quickSubCat = null;   // null＝自動；""＝不指定；其他＝手動選的子類別
+function getQuick(){
+  const p = parseQuick($("quickInput").value);
+  if (!p) return p;
+  if (quickSubCat !== p.category) quickSub = null;
+  if (quickSub !== null){ if (quickSub) p.sub = quickSub; else delete p.sub; p.subAuto = false; }
+  return p;
+}
+function renderQuickSubs(p){
+  const box = $("quickSubs"); box.textContent = "";
+  const list = p ? subList(p.category) : [];
+  box.hidden = !list.length;
+  if (!list.length) return;
+  box.append(el("span",{className:"lbl",textContent:"子類別"}));
+  for (const s of list){
+    const b = el("button",{type:"button",className:"chip",textContent:s});
+    b.setAttribute("aria-pressed", String(p.sub===s));
+    b.onclick = () => { quickSubCat = p.category; quickSub = p.sub===s ? "" : s; updateQuick(); };
+    box.append(b);
+  }
 }
 function updateQuick(){
-  const p = parseQuick($("quickInput").value), box = $("quickPrev");
+  const p = getQuick(), box = $("quickPrev");
+  renderQuickSubs(p);
   box.textContent = "";
   $("quickGo").disabled = !(p && p.amount > 0);
   if (!p){ box.textContent = "可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。"; return; }
   box.append(
     el("span",{className:"tag "+(p.type==="in"?"in":"out"),textContent:p.type==="in"?"收入":"支出"}),
-    el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
+    el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.subAuto ? "（自動帶入）" : "", p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
     el("b",{textContent: p.amount > 0 ? "NT$"+fmt(p.amount) : "（還沒有金額）"}),
     p.date !== today() ? `・${+p.date.slice(5,7)}/${+p.date.slice(8)}` : ""
   );
 }
 function goQuick(){
-  const p = parseQuick($("quickInput").value);
+  const p = getQuick();
   if (!p || !(p.amount > 0)) return;
-  quickAdd(p); $("quickInput").value = ""; updateQuick();
+  delete p.subAuto;
+  quickAdd(p); $("quickInput").value = ""; quickSub = null; quickSubCat = null; updateQuick();
 }
 $("quickInput").addEventListener("input", updateQuick);
 $("quickInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing){ e.preventDefault(); goQuick(); } });
@@ -1630,7 +1664,7 @@ $("quickGo").onclick = goQuick;
     const done = document.readyState === "complete" && (!cloud.on || (cloud.authKnown && (!cloud.user || cloud.ready)));
     if (!done && n < 60) return setTimeout(() => tryAuto(n + 1), 250);
     updateQuick();
-    const p = parseQuick($("quickInput").value);
+    const p = getQuick();
     const m = $("quickMsg");
     if (cloud.on && !cloud.user){ m.hidden = false; m.textContent = "還沒登入雲端，先登入後再按「記下」，資料才會同步。"; return; }
     if (!p || !(p.amount > 0)){ m.hidden = false; m.textContent = "沒有讀到金額，請補上後按「記下」。"; $("quickInput").focus(); return; }
