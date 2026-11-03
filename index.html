@@ -132,6 +132,13 @@ input[type=date],input[type=text],input[type=number],select{font:inherit;color:v
 .cat .track i{display:block;height:100%;background:var(--out);opacity:.85;border-radius:5px}
 .cat .amt{font-family:var(--f-num);font-variant-numeric:tabular-nums;font-size:.85rem;text-align:right;min-width:9ch}
 .pct{color:var(--muted);font-size:.75rem;margin-left:4px}
+.catsub{grid-column:1/-1;font-size:.75rem;color:var(--muted);margin:-4px 0 2px 5.2em;overflow-wrap:anywhere}
+.subchips{gap:6px;align-items:center}
+.subchips .lbl{font-size:.75rem;color:var(--muted);letter-spacing:.08em;margin-right:2px}
+.subchips .chip{font-size:.85rem;padding:3px 12px}
+.subchips .chip.add{border-style:dashed;color:var(--accent)}
+.subchips .chip.del{border-color:var(--out);color:var(--out)}
+.subchips input{width:8em;padding:3px 8px!important;font-size:.85rem!important}
 
 .register{overflow:hidden}
 .day{border-top:1px solid var(--line)} .day:first-child{border-top:0}
@@ -303,6 +310,7 @@ tfoot td{font-weight:700;background:var(--bg)}
           <button type="button" class="eq" data-k="=">記下</button>
         </div>
         <div class="chips" id="chips" role="group" aria-label="分類"></div>
+        <div class="chips subchips" id="subChips" role="group" aria-label="子類別" hidden></div>
         <div class="fields">
           <label class="field"><span id="accLabel">帳戶</span><select id="fAcc"></select></label>
           <label class="field" id="toWrap" hidden><span>轉入帳戶</span><select id="fTo"></select></label>
@@ -490,6 +498,7 @@ const S = { entries:[], budget:0, accounts:[], fixed:[] };
 try {
   const s = JSON.parse(localStorage.getItem(KEY)||"{}");
   for (const k of ["entries","accounts","fixed"]) if (Array.isArray(s[k])) S[k] = s[k];
+  S.subcats = s.subcats && typeof s.subcats === "object" ? s.subcats : null;
   S.budget = +s.budget || 0;
 } catch {}
 if (!S.accounts.length) S.accounts = [{ id:uid(), name:"現金", init:0 }];
@@ -505,7 +514,7 @@ function persist(){
   cloudPush();
 }
 
-let type="out", cat=CATS.out[0], editId=null, pending=null, filterAcc="", fxType="out", fxEdit=null, acEdit=null;
+let sub="", subEdit=false, type="out", cat=CATS.out[0], editId=null, pending=null, filterAcc="", fxType="out", fxEdit=null, acEdit=null;
 let ym = (() => { const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()+1}; })();
 const ymKey = () => `${ym.y}-${pad(ym.m)}`;
 const monthEnd = () => `${ymKey()}-31`;
@@ -564,21 +573,86 @@ function renderNoteChips(){
     box.append(b);
   }
 }
+/* 子類別：每個分類底下可以自己新增，例如 餐飲 → 麥味登 */
+function subList(c){ return (S.subcats && Array.isArray(S.subcats[c])) ? S.subcats[c] : []; }
+function applySubToEntries(c, name){
+  let n = 0;
+  for (const x of S.entries){
+    if (x.category===c && !x.sub && x.note && x.note.includes(name)){
+      x.sub = name; x.note = x.note.replace(name, "").replace(/\s+/g," ").trim(); x.updatedAt = Date.now(); n++;
+    }
+  }
+  return n;
+}
+function ensureSubcats(){
+  if (S.subcats) return false;
+  S.subcats = { "餐飲": ["麥味登"] };
+  applySubToEntries("餐飲", "麥味登");
+  return true;
+}
+function addSubcat(c, name){
+  name = name.trim(); if (!name) return;
+  S.subcats = S.subcats || {};
+  const list = subList(c).slice();
+  if (!list.includes(name)) list.push(name);
+  S.subcats = { ...S.subcats, [c]: list };
+  const n = applySubToEntries(c, name);
+  sub = name; persist(); renderAll(); renderChips();
+  if (n) flash(`已把 ${n} 筆備註含「${name}」的舊紀錄歸到 ${c}・${name}`);
+}
+function removeSubcat(c, name){
+  S.subcats = { ...S.subcats, [c]: subList(c).filter(x => x!==name) };
+  if (sub===name) sub = "";
+  persist(); renderChips();
+}
+function renderSubChips(){
+  const box = $("subChips"); box.textContent = "";
+  box.hidden = type==="transfer";
+  if (type==="transfer") return;
+  const list = subList(cat);
+  box.append(el("span",{className:"lbl",textContent:"子類別"}));
+  for (const s of list){
+    const b = el("button",{type:"button",className:"chip"+(subEdit?" del":""),textContent: subEdit ? s+" ✕" : s});
+    b.setAttribute("aria-pressed", String(!subEdit && sub===s));
+    b.onclick = () => { if (subEdit){ removeSubcat(cat, s); return; } sub = sub===s ? "" : s; renderSubChips(); };
+    box.append(b);
+  }
+  if (subEdit){
+    const done = el("button",{type:"button",className:"chip",textContent:"完成"});
+    done.onclick = () => { subEdit = false; renderSubChips(); };
+    box.append(done); return;
+  }
+  const addB = el("button",{type:"button",className:"chip add",textContent:"＋ 新增"});
+  addB.onclick = () => {
+    const inp = el("input",{type:"text",maxLength:12,placeholder:`${cat}的子類別`});
+    const ok = el("button",{type:"button",className:"chip",textContent:"加入"});
+    const go = () => { const v = inp.value.trim(); if (v) addSubcat(cat, v); else renderSubChips(); };
+    ok.onclick = go;
+    inp.onkeydown = e => { if (e.key==="Enter" && !e.isComposing){ e.preventDefault(); go(); } else if (e.key==="Escape") renderSubChips(); };
+    addB.replaceWith(inp, ok); inp.focus();
+  };
+  box.append(addB);
+  if (list.length){
+    const ed = el("button",{type:"button",className:"linkbtn",textContent:"管理"});
+    ed.onclick = () => { subEdit = true; renderSubChips(); };
+    box.append(ed);
+  }
+}
 function renderChips(){
   const box = $("chips"); box.textContent = "";
   box.hidden = type==="transfer";
-  renderNoteChips();
+  renderNoteChips(); renderSubChips();
   if (type==="transfer") return;
   for (const c of CATS[type]) {
     const b = el("button",{type:"button",className:"chip",textContent:c});
     b.setAttribute("aria-pressed", String(c===cat));
-    b.onclick = () => { cat=c; const a = accFor(c); if (a && !editId) $("fAcc").value = a; renderChips(); };
+    b.onclick = () => { if (cat!==c) sub = ""; cat=c; const a = accFor(c); if (a && !editId) $("fAcc").value = a; renderChips(); };
     box.appendChild(b);
   }
 }
 function setType(t){
   type = t;
-  if (t!=="transfer" && !CATS[t].includes(cat)) cat = CATS[t][0];
+  if (t!=="transfer" && !CATS[t].includes(cat)){ cat = CATS[t][0]; sub = ""; }
   document.querySelectorAll("[data-type]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.type===t)));
   $("toWrap").hidden = t!=="transfer";
   $("accLabel").textContent = t==="transfer" ? "轉出帳戶" : t==="in" ? "存入帳戶" : "付款帳戶";
@@ -648,7 +722,7 @@ function syncSubmit(){ $("submit").disabled = !parseAmount($("amount").value); }
 $("amount").addEventListener("input", syncSubmit);
 
 function resetForm(){
-  editId=null; $("amount").value=""; $("note").value=""; updateCalcPreview(); renderNoteChips();
+  editId=null; $("amount").value=""; $("note").value=""; updateCalcPreview(); sub=""; renderNoteChips(); renderSubChips();
   $("formTitle").textContent="記一筆"; $("submit").textContent="記下"; $("cancelEdit").hidden=true;
   syncSubmit();
 }
@@ -666,6 +740,7 @@ $("form").addEventListener("submit", e => {
   } else body = { type, category:cat, amount, account:from };
   body.date = $("date").value || today();
   body.note = $("note").value.trim();
+  if (type!=="transfer" && sub) body.sub = sub;
   if (editId){
     const i = S.entries.findIndex(x=>x.id===editId);
     if (i>=0){ const old=S.entries[i]; S.entries[i] = { id:old.id, createdAt:old.createdAt, fixedId:old.fixedId, ...body, updatedAt:Date.now() }; }
@@ -683,7 +758,7 @@ let flashT;
 function flash(msg, bad, target="formMsg"){ const m=$(target); m.textContent=msg; m.style.color = bad?"var(--out)":""; clearTimeout(flashT); flashT=setTimeout(()=>m.textContent="",4000); }
 
 function startEdit(x){
-  editId = x.id; cat = x.category;
+  editId = x.id; cat = x.category; sub = x.sub || "";
   $("fAcc").value = x.account; if (x.toAccount) $("fTo").value = x.toAccount;
   setType(x.type);
   $("amount").value = fmtExpr(String(x.amount)); updateCalcPreview(); $("date").value = x.date; $("note").value = x.note || ""; renderNoteChips();
@@ -704,10 +779,10 @@ $("filterAcc").onchange = e => { filterAcc = e.target.value; renderLedger(); };
 function renderLedger(){
   const key = ymKey();
   const month = S.entries.filter(x => String(x.date).startsWith(key));
-  let tin=0, tout=0; const byCat={};
+  let tin=0, tout=0; const byCat={}, bySub={};
   for (const x of month){
     if (x.type==="in") tin+=x.amount;
-    else if (x.type==="out"){ tout+=x.amount; byCat[x.category]=(byCat[x.category]||0)+x.amount; }
+    else if (x.type==="out"){ tout+=x.amount; byCat[x.category]=(byCat[x.category]||0)+x.amount; const sk=x.sub||"未分子類"; (bySub[x.category] ||= {})[sk]=(bySub[x.category][sk]||0)+x.amount; }
   }
   $("sIn").textContent=fmt(tin); $("sOut").textContent=fmt(tout);
   const net=tin-tout; $("sNet").textContent=fmt(net); $("sNet").className="v "+(net<0?"out-c":net>0?"in-c":"");
@@ -736,7 +811,10 @@ function renderLedger(){
   for (const [c,v] of rows){
     const track = el("div",{className:"track"}, el("i",{style:`width:${(v/max*100).toFixed(1)}%`}));
     const amt = el("span",{className:"amt",textContent:fmt(v)}, el("span",{className:"pct",textContent:`${Math.round(v/tout*100)}%`}));
-    cats.append(el("div",{className:"cat"}, el("span",{textContent:c}), track, amt));
+    const subs = bySub[c] ? Object.entries(bySub[c]).sort((a,b)=>b[1]-a[1]) : [];
+    const row = el("div",{className:"cat"}, el("span",{textContent:c}), track, amt);
+    if (subs.some(([k]) => k!=="未分子類")) row.append(el("div",{className:"catsub",textContent: subs.map(([k,v]) => `${k} ${fmt(v)}`).join("・")}));
+    cats.append(row);
   }
 
   const list = month.filter(x => !filterAcc || x.account===filterAcc || x.toAccount===filterAcc)
@@ -763,7 +841,7 @@ function renderLedger(){
       if (x.type==="adjust") eb.hidden = true;
       const db = delBtn("e:"+x.id, () => { S.entries=S.entries.filter(y=>y.id!==x.id); if(editId===x.id) resetForm(); });
       sec.append(el("div",{className:"item"},
-        el("span",{className:"tag "+cls,textContent:x.category}), note,
+        el("span",{className:"tag "+cls,textContent:x.category + (x.sub ? "・"+x.sub : "")}), note,
         x.type==="adjust"
           ? editableAmount(sign+fmt(x.amount), "amt "+amtCls, (x.sign||1)*x.amount, v => { x.sign = v<0?-1:1; x.amount = Math.abs(v); x.updatedAt = Date.now(); }, {allowNegative:true})
           : editableAmount(sign+fmt(Math.abs(x.amount)), "amt "+amtCls, x.amount, v => { x.amount = v; x.updatedAt = Date.now(); }, {allowNegative: !!x.manual}),
@@ -942,7 +1020,7 @@ $("exportBtn").onclick = () => {
   const esc = s => `"${String(s??"").replace(/"/g,'""')}"`;
   const T = {in:"收入", out:"支出", transfer:"轉帳", adjust:"餘額調整"};
   const list=[...S.entries].sort((a,b)=>a.date.localeCompare(b.date));
-  const csv = "﻿日期,類型,分類,金額,帳戶,轉入帳戶,備註\n" + list.map(x=>[x.date,T[x.type],x.category,x.type==="adjust"?(x.sign||1)*x.amount:x.amount,accName(x.account),x.toAccount?accName(x.toAccount):"",x.note].map(esc).join(",")).join("\n");
+  const csv = "﻿日期,類型,分類,子類別,金額,帳戶,轉入帳戶,備註\n" + list.map(x=>[x.date,T[x.type],x.category,x.sub||"",x.type==="adjust"?(x.sign||1)*x.amount:x.amount,accName(x.account),x.toAccount?accName(x.toAccount):"",x.note].map(esc).join(",")).join("\n");
   const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
   const a = el("a",{href:url,download:`帳本備份-${today()}.csv`}); document.body.append(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -1011,7 +1089,7 @@ $("importFile").onchange = async e => {
   }
   const rows=parseCSV(text);
   const hdr=(rows.shift()||[]).map(h=>h.trim()); const col=n=>hdr.indexOf(n);
-  const ix={date:col("日期"),type:col("類型"),cat:col("分類"),amt:col("金額"),acc:col("帳戶"),to:col("轉入帳戶"),note:col("備註")};
+  const ix={date:col("日期"),type:col("類型"),cat:col("分類"),sub:col("子類別"),amt:col("金額"),acc:col("帳戶"),to:col("轉入帳戶"),note:col("備註")};
   const keyOf=x=>[x.date,x.type,x.category,x.amount,x.account,x.toAccount||"",x.note||""].join("|");
   const seen=new Set(S.entries.map(keyOf)); let added=0;
   for (const r of rows){
@@ -1021,6 +1099,7 @@ $("importFile").onchange = async e => {
     const x={ id:uid(), date, amount: isAdj?Math.abs(amount):amount, type: isAdj?"adjust":t==="收入"?"in":t==="轉帳"?"transfer":"out",
       category: r[ix.cat] || "其他", account: accByName(ix.acc>=0?r[ix.acc]:""), note: ix.note>=0?(r[ix.note]||""):"", createdAt:Date.now() };
     if (isAdj) x.sign = amount<0 ? -1 : 1;
+    if (ix.sub>=0 && r[ix.sub]) x.sub = r[ix.sub];
     if (x.type==="transfer"){ x.toAccount = accByName(ix.to>=0?r[ix.to]:""); if (x.toAccount===x.account) continue; }
     const k=keyOf(x); if (seen.has(k)) continue; seen.add(k);
     S.entries.push(x); added++;
@@ -1188,7 +1267,7 @@ const cloud = { on:false, user:null, db:null, ledgerId:null, ledger:null, list:[
   synced:new Map(), syncedMeta:"", ready:false, pending:false, fromCache:false, uploadLocal:null, msg:"", bad:false, showLogin:false };
 const LEDGER_KEY = KEY + "-ledger", BACKUP_KEY = KEY + "-before-cloud";
 const clean = o => JSON.parse(JSON.stringify(o));
-const metaObj = () => clean({ accounts:S.accounts, fixed:S.fixed, budget:+S.budget||0 });
+const metaObj = () => clean({ accounts:S.accounts, fixed:S.fixed, budget:+S.budget||0, subcats:S.subcats||{} });
 const metaJSON = () => JSON.stringify(metaObj());
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k,v) => { try { v==null ? localStorage.removeItem(k) : localStorage.setItem(k,v); } catch {} };
@@ -1239,7 +1318,8 @@ function subscribe(id){
     cloud.ready = true;
     if (first && cloud.uploadLocal){ S.entries = cloud.uploadLocal; cloud.uploadLocal = null; cloudPush(); cloudInfo(`已把這台裝置的 ${S.entries.length} 筆紀錄上傳到雲端。`); }
     for (const e of S.entries) if (!acc(e.account)) e.account = S.accounts[0].id;
-    saveLocal(); renderAll(); renderCloud();
+    if (ensureSubcats()) cloudPush();
+    saveLocal(); renderAll(); renderChips(); renderCloud();
   };
   cloud.unsubs.push(ref.onSnapshot(snap => {
     if (!snap.exists){ cloudErr({code:"permission-denied"}); return; }
@@ -1248,6 +1328,7 @@ function subscribe(id){
     S.accounts = Array.isArray(d.accounts) && d.accounts.length ? d.accounts : S.accounts;
     S.fixed = Array.isArray(d.fixed) ? d.fixed : [];
     S.budget = +d.budget || 0;
+    S.subcats = d.subcats && typeof d.subcats === "object" && !Array.isArray(d.subcats) ? d.subcats : null;
     cloud.syncedMeta = metaJSON();
     gotMeta = true; done();
   }, e => { stopSync(); cloudErr(e); }));
@@ -1424,7 +1505,7 @@ function quickAdd(e){
   const m = $("quickMsg"); m.textContent = ""; m.hidden = false;
   const undo = el("button",{type:"button",className:"linkbtn",textContent:"復原"});
   undo.onclick = () => { S.entries = S.entries.filter(y => y.id !== x.id); persist(); renderAll(); m.textContent = "已復原"; setTimeout(() => { m.hidden = true; }, 2500); };
-  m.append(`✓ 已記下 ${e.category}${e.note ? "・"+e.note : ""}・${accName(e.account)} NT$${fmt(e.amount)}`, undo);
+  m.append(`✓ 已記下 ${e.category}${e.sub ? "・"+e.sub : ""}${e.note ? "・"+e.note : ""}・${accName(e.account)} NT$${fmt(e.amount)}`, undo);
   clearTimeout(quickAdd.t); quickAdd.t = setTimeout(() => { m.hidden = true; }, 8000);
 }
 
@@ -1433,7 +1514,7 @@ function favCombos(){
   for (const x of S.entries){
     if ((x.type!=="in" && x.type!=="out") || x.manual || !(x.amount>0) || x.date < since) continue;
     if (S.fixed.some(f => f.category===x.category && +f.amount===x.amount)) continue;   // 固定收支另外處理
-    const k = [x.type, x.category, x.note||"", x.account, x.amount].join("|");
+    const k = [x.type, x.category, x.sub||"", x.note||"", x.account, x.amount].join("|");
     const o = m.get(k) || { x, n:0, last:"" }; o.n++;
     if (x.date >= o.last){ o.last = x.date; o.x = x; }
     m.set(k, o);
@@ -1446,8 +1527,8 @@ function renderFavs(){
   if (!list.length) box.append(el("span",{className:"quickprev",textContent:"同樣的項目記兩次以上，就會自動出現在這裡。"}));
   for (const {x} of list){
     const b = el("button",{type:"button",className:"chip "+(x.type==="in"?"in":"out"),title:`${x.category}・${accName(x.account)}`});
-    b.append(el("span",{textContent:x.note || x.category}), el("span",{className:"a",textContent:(x.type==="in"?"+":"")+fmt(x.amount)}), el("small",{textContent:accName(x.account).replace(/（.*$/,"")}));
-    b.onclick = () => quickAdd({ type:x.type, category:x.category, amount:x.amount, account: acc(x.account) ? x.account : S.accounts[0].id, note:x.note||"", date:today() });
+    b.append(el("span",{textContent:[x.sub, x.note].filter(Boolean).join(" ") || x.category}), el("span",{className:"a",textContent:(x.type==="in"?"+":"")+fmt(x.amount)}), el("small",{textContent:accName(x.account).replace(/（.*$/,"")}));
+    b.onclick = () => quickAdd({ type:x.type, category:x.category, ...(x.sub ? {sub:x.sub} : {}), amount:x.amount, account: acc(x.account) ? x.account : S.accounts[0].id, note:x.note||"", date:today() });
     box.append(b);
   }
   if ($("quickInput").value.trim()) updateQuick();
@@ -1495,7 +1576,11 @@ function parseQuick(text){
     const re = new RegExp(esc(c), "i");
     if (re.test(s)){ account = id; s = s.replace(re, " "); break; }
   }
-  let note = s.replace(/\s+/g, " ").trim(), type = "out", category = null;
+  let note = s.replace(/\s+/g, " ").trim(), type = "out", category = null, sub = "";
+  if (S.subcats) for (const [c, names] of Object.entries(S.subcats)) {
+    for (const n of names || []) if (n && note.includes(n)){ category = c; sub = n; type = CATS.in.includes(c) && !CATS.out.includes(c) ? "in" : "out"; note = note.replace(n, " ").replace(/\s+/g," ").trim(); break; }
+    if (sub) break;
+  }
   for (const [t, list] of [["out", CATS.out], ["in", CATS.in]]){
     for (const c of list) if (note === c || note.startsWith(c + " ")){ type = t; category = c; note = note.slice(c.length).trim(); break; }
     if (category) break;
@@ -1511,7 +1596,7 @@ function parseQuick(text){
   }
   if (!category) category = "其他";
   if (!account) account = accFor(category) || $("fAcc").value || S.accounts[0].id;
-  return { type, category, note, account, amount, date };
+  return { type, category, ...(sub ? {sub} : {}), note, account, amount, date };
 }
 function updateQuick(){
   const p = parseQuick($("quickInput").value), box = $("quickPrev");
@@ -1520,7 +1605,7 @@ function updateQuick(){
   if (!p){ box.textContent = "可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。"; return; }
   box.append(
     el("span",{className:"tag "+(p.type==="in"?"in":"out"),textContent:p.type==="in"?"收入":"支出"}),
-    el("b",{textContent:p.category}), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
+    el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
     el("b",{textContent: p.amount > 0 ? "NT$"+fmt(p.amount) : "（還沒有金額）"}),
     p.date !== today() ? `・${+p.date.slice(5,7)}/${+p.date.slice(8)}` : ""
   );
@@ -1555,6 +1640,7 @@ $("quickGo").onclick = goQuick;
 })();
 
 /* ---------- boot ---------- */
+if (ensureSubcats()) saveLocal();
 setType("out"); setFxType("out"); renderAll(); showTab(location.hash.slice(1));
 if (document.readyState === "complete") initCloud(); else addEventListener("load", initCloud);
 })();
