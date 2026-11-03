@@ -134,6 +134,8 @@ input[type=date],input[type=text],input[type=number],select{font:inherit;color:v
 .pct{color:var(--muted);font-size:.75rem;margin-left:4px}
 .catsub{grid-column:1/-1;font-size:.75rem;color:var(--muted);margin:-4px 0 2px 5.2em;overflow-wrap:anywhere}
 .subchips{gap:6px;align-items:center}
+.subtable th,.subtable td{padding:8px 10px}
+.subtable td:nth-child(2){white-space:normal}
 .subchips .lbl{font-size:.75rem;color:var(--muted);letter-spacing:.08em;margin-right:2px}
 .subchips .chip{font-size:.85rem;padding:3px 12px}
 .subchips .chip.add{border-style:dashed;color:var(--accent)}
@@ -419,6 +421,17 @@ tfoot td{font-weight:700;background:var(--bg)}
     <section>
       <h2>本月支出分類</h2>
       <div class="panel chartbox tall"><canvas id="cCat" aria-label="本月支出分類比例"></canvas></div>
+    </section>
+    <section>
+      <h2>子類別統計 <span class="charthint" id="subHint"></span></h2>
+      <div class="panel" id="subEmpty" hidden><div class="empty-state">還沒有子類別的紀錄。記帳時選子類別（例如 餐飲・麥味登），就會出現在這裡。</div></div>
+      <div class="panel chartbox" id="subChartBox"><canvas id="cSub" aria-label="本月各子類別支出"></canvas></div>
+      <div class="panel tablebox subtable" id="subTableBox" style="margin-top:10px">
+        <table>
+          <thead><tr><th>分類</th><th>子類別</th><th class="n">本月</th><th class="n">筆數</th><th class="n" id="subRangeH">近12月</th><th class="n">月平均</th></tr></thead>
+          <tbody id="subBody"></tbody>
+        </table>
+      </div>
     </section>
     <section>
       <h2>帳戶餘額走勢</h2>
@@ -788,7 +801,7 @@ function renderLedger(){
   let tin=0, tout=0; const byCat={}, bySub={};
   for (const x of month){
     if (x.type==="in") tin+=x.amount;
-    else if (x.type==="out"){ tout+=x.amount; byCat[x.category]=(byCat[x.category]||0)+x.amount; const sk=x.sub||"未分子類"; (bySub[x.category] ||= {})[sk]=(bySub[x.category][sk]||0)+x.amount; }
+    else if (x.type==="out"){ tout+=x.amount; byCat[x.category]=(byCat[x.category]||0)+x.amount; const sk=x.sub||"未指定"; (bySub[x.category] ||= {})[sk]=(bySub[x.category][sk]||0)+x.amount; }
   }
   $("sIn").textContent=fmt(tin); $("sOut").textContent=fmt(tout);
   const net=tin-tout; $("sNet").textContent=fmt(net); $("sNet").className="v "+(net<0?"out-c":net>0?"in-c":"");
@@ -819,7 +832,7 @@ function renderLedger(){
     const amt = el("span",{className:"amt",textContent:fmt(v)}, el("span",{className:"pct",textContent:`${Math.round(v/tout*100)}%`}));
     const subs = bySub[c] ? Object.entries(bySub[c]).sort((a,b)=>b[1]-a[1]) : [];
     const row = el("div",{className:"cat"}, el("span",{textContent:c}), track, amt);
-    if (subs.some(([k]) => k!=="未分子類")) row.append(el("div",{className:"catsub",textContent: subs.map(([k,v]) => `${k} ${fmt(v)}`).join("・")}));
+    if (subs.some(([k]) => k!=="未指定")) row.append(el("div",{className:"catsub",textContent: subs.map(([k,v]) => `${k} ${fmt(v)}`).join("・")}));
     cats.append(row);
   }
 
@@ -1252,6 +1265,50 @@ function renderCharts(){
         tooltip:{ enabled: !!catRows.length, callbacks:{ label:c => `${c.label}：NT$ ${fmt(c.parsed)}（${Math.round(c.parsed/cur.tout*100)}%）` } } } },
     plugins:[]
   });
+
+  /* 3b. 子類別統計：只統計有設定或用過子類別的分類 */
+  const firstKey = ms[0].key, endKey = ms[ms.length-1].key;
+  const subCats = new Set(Object.keys(S.subcats||{}).filter(c => subList(c).length));
+  for (const x of S.entries) if (x.type==="out" && x.sub) subCats.add(x.category);
+  const sg = new Map();
+  for (const x of S.entries){
+    if (x.type!=="out" || !subCats.has(x.category)) continue;
+    const mk = x.date.slice(0,7);
+    if (mk < firstKey || mk > endKey) continue;
+    const k = x.category + "|" + (x.sub || "未指定");
+    const o = sg.get(k) || { cat:x.category, sub:x.sub||"未指定", cur:0, n:0, total:0 };
+    o.total += x.amount;
+    if (mk === key){ o.cur += x.amount; o.n++; }
+    sg.set(k, o);
+  }
+  const subRows = [...sg.values()].filter(o => o.total > 0)
+    .sort((a,b) => a.cat===b.cat ? (b.cur-a.cur || b.total-a.total) : (CATS.out.indexOf(a.cat)-CATS.out.indexOf(b.cat)));
+  const hasSub = subRows.some(o => o.sub !== "未指定");
+  $("subEmpty").hidden = hasSub; $("subChartBox").hidden = !hasSub; $("subTableBox").hidden = !hasSub;
+  $("subRangeH").textContent = `近${range}月`;
+  $("subHint").textContent = hasSub ? `${ym.y}/${pad(ym.m)}・近 ${range} 個月` : "";
+  const body = $("subBody"); body.textContent = "";
+  if (hasSub){
+    let lastCat = "";
+    for (const o of subRows){
+      body.append(el("tr",{},
+        el("td",{textContent: o.cat===lastCat ? "" : o.cat}),
+        el("td",{textContent:o.sub, style: o.sub==="未指定" ? "color:var(--muted)" : ""}),
+        el("td",{className:"n out-c",textContent: o.cur ? fmt(o.cur) : "—"}),
+        el("td",{className:"n",textContent: o.n || "—"}),
+        el("td",{className:"n",textContent: fmt(o.total)}),
+        el("td",{className:"n",textContent: fmt(o.total / range)})));
+      lastCat = o.cat;
+    }
+    const chartRows = subRows.filter(o => o.cur > 0).sort((a,b) => b.cur - a.cur);
+    $("subChartBox").style.height = Math.max(140, 48 + chartRows.length * 34) + "px";
+    $("subChartBox").hidden = !chartRows.length;
+    if (chartRows.length) upsert("cSub", { type:"bar",
+      data:{ labels: chartRows.map(o => `${o.cat}・${o.sub}`), datasets:[{ label:"本月支出", data: chartRows.map(o => o.cur),
+        backgroundColor: chartRows.map(o => catColor(o.cat) + (o.sub==="未指定" ? (isDark()?"66":"55") : "")), borderRadius:4 }]},
+      options:{ indexAxis:"y", maintainAspectRatio:false, scales:{ x:{...yAxis, beginAtZero:true}, y:{ grid:{display:false} } },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => `NT$ ${fmt(c.parsed.x)}` } } } } });
+  }
 
   /* 4. 帳戶餘額走勢 */
   const balSets = S.accounts.map((a,i) => ({
