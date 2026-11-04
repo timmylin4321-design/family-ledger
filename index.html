@@ -1803,11 +1803,11 @@ const OUT_KW = [
   [/早餐|午餐|晚餐|宵夜|便當|飲料|咖啡|聚餐|外送|點心|下午茶|uber ?eats|foodpanda|熊貓|星巴克|starbucks|路易莎|cama|麥當勞|肯德基|摩斯|漢堡王|必勝客|達美樂|85度c|清心|五十嵐|50嵐|可不可|迷客夏|麥味登|美而美|拉亞|餐廳|小吃|麵|飯|鍋|燒肉|壽司/i, "餐飲"],
   [/加油|保養|停車|捷運|高鐵|台鐵|火車|公車|計程車|uber|etag|過路費|洗車|機車/i, "交通"],
   [/水費|電費|瓦斯/, "水電瓦斯"],
-  [/全聯|好市多|costco|家樂福|衛生紙|洗衣精|超商|7-?11|全家/i, "日用品"],
+  [/全聯|好市多|costco|家樂福|衛生紙|洗衣精|超商|7-?11|7-?eleven|全家|萊爾富|ok ?mart|美廉社|寶雅|屈臣氏|康是美|大創|無印/i, "日用品"],
   [/電話費|網路費|中華電信|手機費|電信/, "電信網路"],
-  [/看診|掛號|藥|醫院|診所|牙醫|化療/, "醫療"],
+  [/看診|掛號|藥|醫院|診所|牙醫|化療|醫學院|醫療|杏一|大樹|長庚|榮總|台大醫/, "醫療"],
   [/房租|房貸/, "房租房貸"],
-  [/保費|保險/, "保險"],
+  [/保費|保險|產物|人壽|富邦產|國泰產/, "保險"],
   [/電影|旅遊|ktv|門票|遊樂|netflix|spotify|disney|youtube|kkbox|steam|威秀|秀泰/i, "娛樂"],
   [/飼料|寵物|豆豆|獸醫/, "寵物"],
   [/學費|補習|書/, "教育"],
@@ -2030,8 +2030,8 @@ async function getOcr(){
   if (vWorker) return vWorker;
   if (!window.Tesseract){ vMsg("下載辨識元件…"); await loadScript(TESS_SRC); }
   vMsg("載入中文辨識資料…（第一次需要下載，之後會記住）");
-  vWorker = await Tesseract.createWorker("chi_tra+eng", 1, { logger: m => { if (/loading|initializ/.test(m.status||"") && m.progress != null) vMsg(`載入辨識資料… ${Math.round(m.progress*100)}%`); } });
-  await vWorker.setParameters({ preserve_interword_spaces: "1" });
+  vWorker = await Tesseract.createWorker("chi_tra", 1, { logger: m => { if (/loading|initializ/.test(m.status||"") && m.progress != null) vMsg(`載入辨識資料… ${Math.round(m.progress*100)}%`); } });
+  await vWorker.setParameters({ preserve_interword_spaces: "1", tessedit_pageseg_mode: "6" });
   return vWorker;
 }
 // 灰階化；深色背景自動反白，讓文字變成白底黑字
@@ -2059,21 +2059,44 @@ function frameCanvas(src, w, h){
   return c;
 }
 const seekTo = (v, t) => new Promise(ok => { const h = () => { v.removeEventListener("seeked", h); ok(); }; v.addEventListener("seeked", h); v.currentTime = t; });
+// 小縮圖（40×300 灰階），用來估計兩個畫面之間捲動了多少
+function scrollThumb(src){
+  const t = document.createElement("canvas"); t.width = 40; t.height = 300;
+  const x = t.getContext("2d", { willReadFrequently:true }); x.drawImage(src, 0, 0, 40, 300);
+  const d = x.getImageData(0, 0, 40, 300).data, g = new Float32Array(40*300);
+  for (let i=0; i<g.length; i++) g[i] = (d[i*4] + d[i*4+1] + d[i*4+2]) / 3;
+  return g;
+}
+// 回傳 [位移, 誤差]；位移為正代表內容往上捲（往下看）。上方 15% 是固定標題列，不列入比較
+function scrollShift(a, b){
+  const top = 45; let best = [0, Infinity];
+  for (let sft=-70; sft<=70; sft++){
+    let sum = 0, n = 0;
+    for (let y=top; y<300; y+=2){ const y2 = y - sft; if (y2 < top || y2 >= 300) continue; for (let x=0; x<40; x+=2){ sum += Math.abs(b[y2*40+x] - a[y*40+x]); n++; } }
+    if (n > 600 && sum/n < best[1]) best = [sft, sum/n];
+  }
+  return best;
+}
 async function videoFrames(file, onFrame, onProgress){
   const v = $("vVid"), url = URL.createObjectURL(file);
   try {
     v.src = url;
     await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error("這個影片格式無法讀取")); v.load(); });
     try { await v.play(); v.pause(); } catch {}
-    const dur = v.duration, step = 0.7, n = Math.max(1, Math.ceil(dur / step));
-    let prev = null;
+    const dur = v.duration, step = 0.1, n = Math.max(1, Math.ceil(dur / step));
+    let prev = null, moved = 0, pending = false;
     for (let i=0; i<=n && !vStopFlag; i++){
       await seekTo(v, Math.min(Math.max(dur - 0.05, 0), i * step));
       onProgress(i / n);
-      const sig = thumbSig(v);
-      if (prev && sigDiff(prev, sig) < 0.015) continue;   // 畫面幾乎沒動就跳過
-      prev = sig;
-      await onFrame(frameCanvas(v, v.videoWidth, v.videoHeight));
+      const th = scrollThumb(v);
+      if (prev){
+        const [sft, err] = scrollShift(prev, th);
+        moved += err > 40 ? 160 : Math.abs(sft);   // 對不上就當成捲了一大段
+        if (Math.abs(sft) > 0 || err > 8) pending = true;
+      }
+      prev = th;
+      // 第一個畫面、每捲過約半個畫面、以及最後一個畫面才辨識
+      if (i === 0 || moved >= 110 || (i === n && pending)){ moved = 0; pending = false; await onFrame(frameCanvas(v, v.videoWidth, v.videoHeight), true); }
     }
   } finally { v.removeAttribute("src"); v.load(); URL.revokeObjectURL(url); }
 }
@@ -2096,7 +2119,9 @@ const V_SKIP = /繳款|應繳|本期|上期|帳單|額度|可用|回饋|點數|�
 function parseCardText(text, frame){
   const seq = []; let pending = "";
   const lines = text.split(/\n/).map(l => l.replace(/[|｜¦]/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
-  for (const raw of lines){
+  for (const raw0 of lines){
+    // 常見的數字誤讀：NTS→NT$、l/I→1、O→0
+    const raw = raw0.replace(/NT\s*[S5$]/gi, "NT$").replace(/\$\s*[lIi|]\s*[,.]?\s*(\d{3})(?!\d)/g, "$$1,$1").replace(/(?<=\d)[Oo](?=[\d,]|$|\s)/g, "0").replace(/(?<=[\d,])[lI|](?=[\d,])/g, "1");
     let l = raw, d = null;
     const m1 = l.match(/(20\d{2})\s*[\/.\-年]\s*(\d{1,2})\s*[\/.\-月]\s*(\d{1,2})\s*日?/);
     const m2 = !m1 && l.match(/(?<![\d,.$])(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?(?![\d,])/);
@@ -2134,25 +2159,180 @@ function parseCardText(text, frame){
   }
   return seq.filter(x => x.t === "R").map(({ t, ...r }) => r);
 }
-const normName = s => s.replace(/\s+/g, "");
+// ---- 欄位式辨識：左欄日期、中間商家、右欄金額（信用卡 App 的明細大多是這種排版） ----
+const isHan = c => /\p{Script=Han}/u.test(c);
+function joinWords(ws){
+  let out = "";
+  for (const w of ws){ const t = w.text.trim(); if (!t) continue; if (out && !(isHan(out.slice(-1)) || isHan(t[0]))) out += " "; out += t; }
+  return out;
+}
+function cleanMerchant(t){
+  // 「連加＊連加＊」這類支付前綴常被讀成 運加／之加／水／六／未…，一起去掉
+  const pre = /^[^\p{L}\p{N}]*(?:.{0,2}?[連運之殼速建邊造]加\s*[*＊xX×>水六未冰地池檔]*\s*)+/u;
+  if (pre.test(t)) t = t.replace(pre, "").replace(/^[水六未冰地池檔>]\s*(?=\p{Script=Han}{2})/u, "");
+  t = t.replace(/^[水六未冰>]\s*(?=(麥味登|萊爾富|美德耐|統一|全家|麥當勞|必勝客|萊|美|麥))/u, "");
+  return t.replace(/^[^\p{L}\p{N}]+/u, "").replace(/^((連加|街口|全支付|LINE ?PAY|悠遊付)\s*[*＊:：]?\s*)+/i, m => /LINE/i.test(m) ? "LINEPAY " : "")
+    .replace(/[*＊]/g, " ").replace(/[.。…,、，:;"'”“‘’|~\-—_]+$/g, "").replace(/\s+/g, " ").trim();
+}
+async function columnOcr(ocr, c){
+  const W = c.width, H = c.height;
+  const { data } = await ocr.recognize(c);
+  const words = (data.words || []).filter(w => w.text.trim());
+  const money = words.filter(w => /[$＄]/.test(w.text) && w.bbox.x1 > W * 0.6);
+  if (money.length < 2) return { ok:false, text: data.text || "" };
+  // 金額靠右對齊：用右緣中位數＋字寬估出金額欄範圍，避免吃到商家名稱
+  const rights = money.map(w => w.bbox.x1).sort((a, b) => a - b), amtR = rights[rights.length >> 1] + 8;
+  const charW = Math.min(...money.map(w => (w.bbox.x1 - w.bbox.x0) / Math.max(2, w.text.length)));
+  const amtL = Math.max(Math.round(W * 0.45), Math.round(amtR - charW * 9.5));
+  const dayWords = words.filter(w => w.bbox.x1 < W * 0.2 && /\d/.test(w.text));
+  const dayR = dayWords.length >= 2 ? Math.max(...dayWords.map(w => w.bbox.x1)) + 10 : Math.round(W * 0.14);
+  await ocr.setParameters({ tessedit_char_whitelist: "0123456789$,.-" });
+  const R = (await ocr.recognize(c, { rectangle: { left: amtL, top: 0, width: Math.min(W, amtR) - amtL, height: H } })).data;
+  await ocr.setParameters({ tessedit_char_whitelist: "0123456789日" });
+  const L = (await ocr.recognize(c, { rectangle: { left: 0, top: 0, width: dayR, height: H } })).data;
+  await ocr.setParameters({ tessedit_char_whitelist: "" });
+  const amts = (R.lines || []).map(l => {
+    const t = l.text.replace(/\s/g, ""), k = t.lastIndexOf("$"); if (k < 0) return null;
+    const m = t.slice(k + 1).match(/^(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?/);
+    return m ? { y0:l.bbox.y0, y1:l.bbox.y1, amount: Math.round(+m[1].replace(/,/g, "") + (m[2] ? +("0." + m[2]) : 0)), neg: /-\s*\$|\$\s*-/.test(t) } : null;
+  }).filter(Boolean);
+  const days = (L.lines || []).map(l => {
+    const t = l.text.replace(/\s/g, ""), m = t.match(/^(\d{1,2})日?$/); if (!m) return null;
+    return { y0:l.bbox.y0, y1:l.bbox.y1, day:+m[1], raw:m[1], text:t };
+  }).filter(d => d && d.day >= 0 && d.day <= 31);
+  // 左欄要真的是「日期欄」（例如 28日），否則改用整段文字的解析方式
+  if (dayWords.length < 2 && days.filter(d => /日/.test(d.text)).length < 2) return { ok:false, text: data.text || "" };
+  const months = (data.lines || []).map(l => {
+    const t = l.text.replace(/\s/g, ""); if (/[$＄]/.test(t)) return null;
+    const m = t.match(/(?:(20\d{2})年)?(\d{1,2})月(?:份)?$/);
+    return m && +m[2] >= 1 && +m[2] <= 12 ? { y:(l.bbox.y0 + l.bbox.y1) / 2, month:+m[2], year: m[1] ? +m[1] : 0 } : null;
+  }).filter(Boolean);
+  const hs = words.map(w => w.bbox.y1 - w.bbox.y0).sort((a, b) => a - b), medH = hs[hs.length >> 1] || 30;
+  const rows = [];
+  for (const a of amts){
+    const cy = (a.y0 + a.y1) / 2, h = Math.max(20, a.y1 - a.y0);
+    const mw = words.filter(w => w.bbox.x0 >= dayR - 4 && w.bbox.x1 <= amtL + 10 && Math.abs((w.bbox.y0 + w.bbox.y1) / 2 - cy) < h * 0.7
+      && (w.bbox.y1 - w.bbox.y0) > medH * 0.55 && !(w.confidence < 30 && w.text.trim().length === 1 && !/[\p{L}\p{N}]/u.test(w.text)));
+    let best = null;
+    for (const d of days){ const dist = cy - (d.y0 + d.y1) / 2; if (dist > -h * 0.6 && dist < h * 2.2 && (!best || Math.abs(dist) < Math.abs(best.dist))) best = { ...d, dist }; }
+    if (a.y1 > H - 6 || a.y0 < 6) continue;   // 被畫面邊緣切到的列不採用
+    rows.push({ y: cy, amount: a.amount, refund: a.neg, merchant: cleanMerchant(joinWords(mw)), day: best ? best.day : -1, raw: best ? best.raw : "" });
+  }
+  // 兩位數的日期（例如 01、11、21）常把細細的「1」漏掉 → 用上下筆推回來
+  const twoDigit = rows.some(r => r.raw.length === 2);
+  rows.forEach(r => { r.sus = twoDigit && r.raw.length === 1; });
+  for (let i=0; i<rows.length; i++){
+    const r = rows[i]; if (!r.sus) continue;
+    const up = rows.slice(0, i).reverse().find(x => x.day >= 1 && !x.sus && !months.some(h => h.y > x.y && h.y < r.y));
+    const dn = rows.slice(i + 1).find(x => x.day >= 1 && !x.sus && !months.some(h => h.y > r.y && h.y < x.y));
+    const d = r.day;
+    const cands = (d === 0 ? [1, 10, 20, 30] : d === 1 ? [11, 1, 10, 21, 31] : [d * 10 + 1, d, 10 + d, 20 + d, 30 + d, d * 11]).filter(v => v >= 1 && v <= 31);
+    const fit = cands.filter(v => (!up || v <= up.day) && (!dn || v >= dn.day));
+    r.day = fit.length ? fit[0] : (d === 0 ? 1 : d === 1 ? 11 : d);
+  }
+  const okRows = rows.filter(r => r.day >= 1 && r.amount > 0);
+  const hdrBetween = (a, b) => months.some(h => h.y > a.y && h.y < b.y);
+  for (let i=1; i<okRows.length-1; i++){
+    const a = okRows[i-1], r = okRows[i], b = okRows[i+1];
+    if (r.day > a.day && !hdrBetween(a, r) && b.day <= a.day && !hdrBetween(r, b)){
+      const alt = [r.day % 10, r.day - 10, r.day - 20, Math.floor(r.day / 10)].filter(v => v >= b.day && v <= a.day && v >= 1);
+      r.day = alt.length ? alt[0] : a.day;
+    }
+  }
+  return { ok:true, rows: okRows, months };
+}
+// 跨畫面的月份追蹤：遇到「10月份」這類標題就切換；沒有標題時，日期突然變大就當作進到上個月
+const vMonthState = { cur:0, prevOf:{}, lastDay:0, sawHeader:false };
+function resetMonthState(){ const t = today(); vMonthState.cur = +t.slice(5,7); vMonthState.prevOf = {}; vMonthState.lastDay = 0; vMonthState.sawHeader = false; }
+function assignDates(rows, months){
+  const st = vMonthState;
+  months.sort((a, b) => a.y - b.y);
+  for (const h of months){ if (h.month !== st.cur && !(h.month in st.prevOf)){ st.prevOf[h.month] = st.cur; } st.sawHeader = true; }
+  const out = [];
+  for (const r of rows.sort((a, b) => a.y - b.y)){
+    const above = months.filter(h => h.y < r.y).pop(), below = months.find(h => h.y > r.y);
+    let m;
+    if (above) m = above.month;
+    else if (below) m = st.prevOf[below.month] || (below.month % 12) + 1;
+    else {
+      m = st.cur;
+      if (!st.sawHeader && st.lastDay && r.day > st.lastDay + 7) m = m === 1 ? 12 : m - 1;
+    }
+    st.cur = m; st.lastDay = r.day;
+    const d = cardDate(0, m, r.day);
+    if (d) out.push({ ...r, date: d });
+  }
+  return out;
+}
+const normName = s => s.replace(/連加|LINEPAY|[^\p{L}\p{N}]/gu, "");
 function similar(a, b){
   a = normName(a); b = normName(b);
-  if (!a || !b) return false;
+  if (!a || !b) return true;
   if (a.includes(b) || b.includes(a)) return true;
   const A = new Set(a), B = new Set(b); let n = 0; for (const c of A) if (B.has(c)) n++;
-  return n / Math.min(A.size, B.size) >= 0.6;
+  return n / Math.min(A.size, B.size) >= 0.45;
 }
+const goodName = s => (s.match(/[\p{Script=Han}]/gu) || []).length + (s.match(/[A-Za-z]{2,}/g) || []).length * 2;
+// 同一個畫面裡「同日同金額同商家」出現幾次就算幾筆；不同畫面重複看到的只留一份
 function mergeRows(found){
+  const local = [];
   for (const r of found){
-    const same = vRows.find(x => x.frame !== r.frame && x.amount === r.amount && x.refund === r.refund && (x.date === r.date || !x.date || !r.date) && similar(x.merchant, r.merchant));
-    if (same){
-      if (!same.date && r.date) same.date = r.date;
-      if (r.merchant.length > same.merchant.length && r.merchant.length <= 24) same.merchant = r.merchant;
-      same.frame = r.frame;
-      continue;
-    }
-    vRows.push({ ...r });
+    const g = local.find(x => x.date === r.date && x.amount === r.amount && x.refund === r.refund && similar(x.merchant, r.merchant));
+    if (g){ g.count++; if (goodName(r.merchant) > goodName(g.merchant)) g.merchant = r.merchant; } else local.push({ ...r, count:1 });
   }
+  for (const g of local){
+    const G = vGroups.find(x => (x.date === g.date || !x.date || !g.date) && x.amount === g.amount && x.refund === g.refund && similar(x.merchant, g.merchant));
+    if (G){
+      G.count = Math.max(G.count, g.count); G.seen++;
+      if (!G.date && g.date) G.date = g.date;
+      if (goodName(g.merchant) > goodName(G.merchant) && g.merchant.length <= 30) G.merchant = g.merchant;
+    } else vGroups.push({ ...g, seen:1 });
+  }
+  buildVRows();
+}
+let vGroups = [], vPhys = [];
+// 影片：相鄰畫面會有重疊的列，用「金額序列」對齊把新畫面接到清單後面；同一列在多個畫面的日期、金額取多數決
+function rowMatch(P, r){ return !!P.amounts[r.amount] || (!!P.dates[r.date] && normName(P.merchant).length > 1 && similar(P.merchant, r.merchant) && normName(P.merchant).slice(0,3) === normName(r.merchant).slice(0,3)); }
+function mergePositional(found){
+  if (!found.length) return;
+  const R = found.slice().sort((a, b) => a.y - b.y), G = vPhys;
+  let bestT = G.length, bestScore = 0, bestL = 0;
+  for (let t=Math.max(0, G.length - 16); t<G.length; t++){
+    const L = Math.min(R.length, G.length - t); let sc = 0;
+    for (let i=0; i<L; i++) if (rowMatch(G[t+i], R[i])) sc++;
+    if (sc >= Math.max(1, Math.ceil(L * 0.5)) && (sc > bestScore || (sc === bestScore && L > bestL))){ bestT = t; bestScore = sc; bestL = L; }
+  }
+  // 逐列對齊，允許某個畫面漏讀一列或讀錯金額
+  let g = bestT;
+  R.forEach((r, i) => {
+    let P = null;
+    for (let k=g; k<Math.min(G.length, g + 3); k++) if (rowMatch(G[k], r)){ P = G[k]; g = k + 1; break; }
+    if (!P && g < G.length){
+      const nx = R[i + 1];
+      if (nx && rowMatch(G[g], nx)){ P = { amounts:{}, dates:{}, names:{}, merchant:r.merchant, refund:r.refund, n:0 }; G.splice(g, 0, P); g++; }   // 這一列是先前畫面漏掉的
+      else { P = G[g]; g++; }   // 同一列，只是這次讀錯
+    }
+    if (!P){ P = { amounts:{}, dates:{}, names:{}, merchant:r.merchant, refund:r.refund, n:0 }; G.push(P); g = G.length; }
+    P.amounts[r.amount] = (P.amounts[r.amount] || 0) + 1;
+    P.dates[r.date] = (P.dates[r.date] || 0) + 1; P.n++;
+    if (r.merchant) P.names[r.merchant] = (P.names[r.merchant] || 0) + 1;
+    P.merchant = Object.entries(P.names).sort((a, b) => b[1] - a[1] || goodName(b[0]) - goodName(a[0]))[0]?.[0] || P.merchant;
+  });
+  buildVRows();
+}
+const topKey = o => Object.entries(o).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0][0];   // 票數相同取位數多的（讀錯多半是少讀）
+function buildVRows(){
+  const phys = vPhys;
+  // 日期票數相同時，挑和上下筆順序一致的
+  phys.forEach((P, i) => {
+    const cands = Object.entries(P.dates).sort((a, b) => b[1] - a[1]), top = cands.filter(c => c[1] === cands[0][1]).map(c => c[0]);
+    let d = top[0];
+    if (top.length > 1){ const up = phys[i-1] && phys[i-1].date, fit = top.filter(x => !up || x <= up); d = fit[0] || d; }
+    P.date = d;
+  });
+  const fromPhys = phys.map(P => ({ date:P.date, merchant:P.merchant, amount:+topKey(P.amounts), refund:P.refund }));
+  const fromGroups = vGroups.flatMap(G => Array.from({ length: G.count }, () => ({ date:G.date, merchant:G.merchant, amount:G.amount, refund:G.refund })));
+  vRows = [...fromPhys, ...fromGroups];
 }
 function guessCat(r){
   if (r.refund) return { category:"退款", sub:"" };
@@ -2207,7 +2387,7 @@ function vSummary(){
   $("vAll").checked = on.length === vRows.length;
 }
 $("vAll").onchange = () => { for (const r of vRows) r.on = $("vAll").checked; renderVRows(); };
-$("vClear").onclick = () => { vRows = []; renderVRows(); $("vMsg").textContent = ""; };
+$("vClear").onclick = () => { vRows = []; vGroups = []; vPhys = []; renderVRows(); $("vMsg").textContent = ""; };
 $("vStop").onclick = () => { vStopFlag = true; vMsg("停止中…"); };
 try { const a = localStorage.getItem(V_ACC_KEY); if (a) setTimeout(() => { if (acc(a)) $("vAcc").value = a; }, 0); } catch {}
 $("vAcc").onchange = () => { try { localStorage.setItem(V_ACC_KEY, $("vAcc").value); } catch {} };
@@ -2219,7 +2399,7 @@ $("vImport").onclick = () => {
   }
   persist();
   const last = on[0].date.split("-"); ym = { y:+last[0], m:+last[1] };
-  vRows = vRows.filter(r => !r.on); renderAll(); renderVRows();
+  vRows = vRows.filter(r => !r.on); vGroups = []; vPhys = []; renderAll(); renderVRows();
   flash(`已匯入 ${on.length} 筆到 ${accName(account)}`, false, "vMsg"); $("vProg").hidden = false; $("vBar").hidden = true; $("vStop").hidden = true;
 };
 $("vFile").onchange = async () => {
@@ -2230,15 +2410,24 @@ $("vFile").onchange = async () => {
   let frames = 0, before = vRows.length;
   try {
     const ocr = await getOcr();
-    const doFrame = async c => {
+    resetMonthState();
+    if (vRows.length && !vGroups.length) vGroups = vRows.map(r => ({ ...r, count:1, seen:1 }));
+    vPhys = [];
+    const doFrame = async (c, offset) => {
       frames++;
-      const { data } = await ocr.recognize(prepCanvas(c));
-      mergeRows(parseCardText(data.text || "", frames));
+      const r = await columnOcr(ocr, prepCanvas(c));
+      if (window.__vlog) window.__vlog.push({ frames, ok:r.ok, months:r.months, rows:(r.rows||[]).map(x => [Math.round(x.y), x.day, x.amount, x.merchant].join(" ")) });
+      if (r.ok && offset) mergePositional(assignDates(r.rows, r.months));
+      else if (r.ok) mergeRows(assignDates(r.rows, r.months));
+      else mergeRows(parseCardText(r.text, frames));
       vMsg(`辨識中… 已讀 ${frames} 個畫面，找到 ${vRows.length} 筆`);
     };
     for (let f=0; f<files.length && !vStopFlag; f++){
       const file = files[f];
       if (/^video\//.test(file.type) || /\.(mov|mp4|m4v|webm)$/i.test(file.name)){
+        // 每支影片各自計算位置：先把前一支的結果收起來
+        if (vPhys.length){ buildVRows(); vGroups = vRows.map(r => ({ ...r, count:1, seen:1 })); vPhys = []; }
+        resetMonthState();
         await videoFrames(file, doFrame, p => { $("vBar").value = (f + p) / files.length; });
       } else {
         await doFrame(await imageFrame(file)); $("vBar").value = (f + 1) / files.length;
