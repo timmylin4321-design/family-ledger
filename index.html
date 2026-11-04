@@ -294,7 +294,7 @@ tfoot td{font-weight:700;background:var(--bg)}
           <input type="text" id="quickInput" placeholder="例：午餐 120、加油 1500 遠東" enterkeyhint="done" autocomplete="off" aria-label="一句話記帳">
           <button type="button" class="primary small" id="quickGo" disabled>記下</button>
         </div>
-        <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。加油可說「加油 行駛 350 公里 30 公升 油錢 1500」，會自動算油耗。</div>
+        <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。加油打「加油 350 30 1500」（公里 公升 油錢），會自動算油耗。</div>
         <div class="chips subchips" id="quickAccs" role="group" aria-label="快速記帳的付款方式"></div>
         <div class="chips subchips" id="quickSubs" role="group" aria-label="快速記帳的子類別" hidden></div>
         <div class="quickmsg" id="quickMsg" hidden></div>
@@ -1776,6 +1776,15 @@ function parseQuick(text){
   s = s.replace(new RegExp("(?:加油)?公升數\\s*" + num, "i"), (_, n) => { liters = +n; return " "; });
   if (!km) s = s.replace(new RegExp(num + "\\s*(?:公里|km)(?![a-z])", "i"), (_, n) => { km = +n; return " "; });
   if (!liters) s = s.replace(new RegExp(num + "\\s*(?:公升|升|L)(?![a-z])", "i"), (_, n) => { liters = +n; return " "; });
+  // 只打數字：「加油 350 30 1500」＝ 公里 公升 油錢（也可用 / 或 、 隔開；只打三個數字也算加油）
+  if (!km && !liters && (/加油/.test(s) || /^[\s\d.\/,，、]+$/.test(s))){
+    const m3 = s.match(/(?<![\d.\-])()(\d+(?:\.\d+)?)\s*[\s\/,，、]\s*(\d+(?:\.\d+)?)\s*[\s\/,，、]\s*(\d+(?:\.\d+)?)(?=\s|$)/);
+    if (m3 && +m3[2] > 0 && +m3[3] > 0){
+      km = +m3[2]; liters = +m3[3];
+      if (liters > km) [km, liters] = [liters, km];
+      s = s.slice(0, m3.index) + " " + m3[4] + " " + s.slice(m3.index + m3[0].length);
+    }
+  }
   if (km || liters) s = s.replace(/行駛了?|跑了|加了|油錢|油費|花了|共/g, " ");
   if ((km || liters) && !/加油/.test(s)) s += " 加油 ";
   s = s.replace(/NT\$|\$/gi, " ");
