@@ -139,6 +139,7 @@ input[type=date],input[type=text],input[type=number],select{font:inherit;color:v
 .catsub{grid-column:1/-1;font-size:.75rem;color:var(--muted);margin:-4px 0 2px 5.2em;overflow-wrap:anywhere}
 .subchips{gap:6px;align-items:center}
 .subtable th,.subtable td{padding:8px 10px}
+.fueltable th,.fueltable td{padding:8px 6px;font-size:.85rem}
 .subtable td:nth-child(2){white-space:normal}
 .subchips .lbl{font-size:.75rem;color:var(--muted);letter-spacing:.08em;margin-right:2px}
 .subchips .chip{font-size:.85rem;padding:3px 12px}
@@ -287,7 +288,7 @@ tfoot td{font-weight:700;background:var(--bg)}
           <input type="text" id="quickInput" placeholder="例：午餐 120、加油 1500 遠東" enterkeyhint="done" autocomplete="off" aria-label="一句話記帳">
           <button type="button" class="primary small" id="quickGo" disabled>記下</button>
         </div>
-        <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。</div>
+        <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。加油可說「加油 行駛 350 公里 30 公升 油錢 1500」，會自動算油耗。</div>
         <div class="chips subchips" id="quickAccs" role="group" aria-label="快速記帳的付款方式"></div>
         <div class="chips subchips" id="quickSubs" role="group" aria-label="快速記帳的子類別" hidden></div>
         <div class="quickmsg" id="quickMsg" hidden></div>
@@ -441,6 +442,15 @@ tfoot td{font-weight:700;background:var(--bg)}
         <table>
           <thead><tr><th>分類</th><th>子類別</th><th class="n">本月</th><th class="n">筆數</th><th class="n" id="subRangeH">近12月</th><th class="n">月平均</th></tr></thead>
           <tbody id="subBody"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="fuelSec" hidden>
+      <h2>油耗紀錄 <span class="charthint" id="fuelHint"></span></h2>
+      <div class="panel tablebox subtable fueltable">
+        <table>
+          <thead><tr><th>日期</th><th class="n">公里</th><th class="n">公升</th><th class="n">油錢</th><th class="n">km/L</th><th class="n">元/公里</th></tr></thead>
+          <tbody id="fuelBody"></tbody>
         </table>
       </div>
     </section>
@@ -627,6 +637,9 @@ function fixSnackSubs(){
   }
   return n > 0;
 }
+// 油耗：km ÷ 公升
+const fuelEff = x => (x && x.km > 0 && x.liters > 0) ? x.km / x.liters : 0;
+const fuelText = x => fuelEff(x) ? `${fmt(x.km)} 公里・${+x.liters.toFixed(2)} 公升・${fuelEff(x).toFixed(1)} km/L` : "";
 function addSubcat(c, name){
   name = name.trim(); if (!name) return;
   S.subcats = S.subcats || {};
@@ -784,7 +797,7 @@ $("form").addEventListener("submit", e => {
   if (type!=="transfer" && sub) body.sub = sub;
   if (editId){
     const i = S.entries.findIndex(x=>x.id===editId);
-    if (i>=0){ const old=S.entries[i]; S.entries[i] = { id:old.id, createdAt:old.createdAt, fixedId:old.fixedId, ...body, updatedAt:Date.now() }; }
+    if (i>=0){ const old=S.entries[i]; S.entries[i] = { id:old.id, createdAt:old.createdAt, fixedId:old.fixedId, ...(old.km ? {km:old.km} : {}), ...(old.liters ? {liters:old.liters} : {}), ...body, updatedAt:Date.now() }; }
     flash("已更新");
   } else {
     S.entries.push({ id:uid(), ...body, createdAt:Date.now() });
@@ -877,7 +890,7 @@ function renderLedger(){
       let sign = x.type==="in"?(neg?"−":"+"):x.type==="out"?(neg?"+":"−"):x.type==="adjust"?((x.sign||1)>0?"+":"−"):"⇄ ";
       let amtCls = cls;
       if (x.type==="transfer" && filterAcc){ const incoming = x.toAccount===filterAcc; sign = incoming?"+":"−"; amtCls = incoming?"in":"out"; }
-      const sub = x.type==="transfer" ? `${accName(x.account)} → ${accName(x.toAccount)}` : accName(x.account) + (x.fixedId?" · 固定":"");
+      const sub = x.type==="transfer" ? `${accName(x.account)} → ${accName(x.toAccount)}` : accName(x.account) + (x.fixedId?" · 固定":"") + (fuelEff(x) ? " · " + fuelText(x) : "");
       const note = el("span",{className:"note"}, el("span",{textContent:x.note || (x.type==="transfer"?"轉帳":"—")}), el("small",{textContent:sub}));
       const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick=()=>startEdit(x);
       if (x.type==="adjust") eb.hidden = true;
@@ -1367,6 +1380,29 @@ function renderCharts(){
         plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => `NT$ ${fmt(c.parsed.x)}` } } } } });
   }
 
+  /* 3c. 油耗紀錄（期間內有填公里數與公升數的加油） */
+  const fuel = S.entries.filter(x => fuelEff(x) && x.date.slice(0,7) >= firstKey && x.date.slice(0,7) <= endKey).sort((a,b) => b.date.localeCompare(a.date));
+  $("fuelSec").hidden = !fuel.length;
+  const fb = $("fuelBody"); fb.textContent = "";
+  if (fuel.length){
+    const tk = fuel.reduce((s,x)=>s+x.km,0), tl = fuel.reduce((s,x)=>s+x.liters,0), tm = fuel.reduce((s,x)=>s+x.amount,0);
+    $("fuelHint").textContent = `${rangeLabel.trim()}・平均 ${(tk/tl).toFixed(1)} km/L`;
+    for (const x of fuel) fb.append(el("tr",{},
+      el("td",{textContent:`${+x.date.slice(5,7)}/${+x.date.slice(8)}${x.sub ? " "+x.sub : ""}`}),
+      el("td",{className:"n",textContent:fmt(x.km)}),
+      el("td",{className:"n",textContent:+x.liters.toFixed(2)}),
+      el("td",{className:"n",textContent:fmt(x.amount)}),
+      el("td",{className:"n",textContent:fuelEff(x).toFixed(1)}),
+      el("td",{className:"n",textContent:(x.amount/x.km).toFixed(2)})));
+    fb.append(el("tr",{style:"font-weight:700"},
+      el("td",{textContent:"合計／平均"}),
+      el("td",{className:"n",textContent:fmt(tk)}),
+      el("td",{className:"n",textContent:+tl.toFixed(2)}),
+      el("td",{className:"n",textContent:fmt(tm)}),
+      el("td",{className:"n",textContent:(tk/tl).toFixed(1)}),
+      el("td",{className:"n",textContent:(tm/tk).toFixed(2)})));
+  }
+
   /* 4. 帳戶餘額走勢 */
   const balSets = S.accounts.map((a,i) => ({
     label:a.name, data: ms.map(m => balanceAt(a.id, `${m.key}-31`)),
@@ -1625,7 +1661,7 @@ function quickAdd(e){
   const m = $("quickMsg"); m.textContent = ""; m.hidden = false;
   const undo = el("button",{type:"button",className:"linkbtn",textContent:"復原"});
   undo.onclick = () => { S.entries = S.entries.filter(y => y.id !== x.id); persist(); renderAll(); m.textContent = "已復原"; setTimeout(() => { m.hidden = true; }, 2500); };
-  m.append(`✓ 已記下 ${e.category}${e.sub ? "・"+e.sub : ""}${e.note ? "・"+e.note : ""}・${accName(e.account)} NT$${fmt(e.amount)}`, undo);
+  m.append(`✓ 已記下 ${e.category}${e.sub ? "・"+e.sub : ""}${e.note ? "・"+e.note : ""}・${accName(e.account)} NT$${fmt(e.amount)}${fuelEff(e) ? "・油耗 "+fuelEff(e).toFixed(1)+" km/L" : ""}`, undo);
   clearTimeout(quickAdd.t); quickAdd.t = setTimeout(() => { m.hidden = true; }, 8000);
 }
 
@@ -1679,6 +1715,15 @@ function parseQuick(text){
   let date = today();
   if (/昨天/.test(s)){ date = shiftDay(-1); s = s.replace(/昨天/g, " "); }
   else if (/前天/.test(s)){ date = shiftDay(-2); s = s.replace(/前天/g, " "); }
+  // 加油：「行駛 350 公里、30 公升、油錢 1500」→ 記下公里數與公升數，算油耗
+  let km = 0, liters = 0;
+  const num = "(\\d+(?:\\.\\d+)?)";
+  s = s.replace(new RegExp("(?:行駛)?(?:公里數|里程數?)\\s*" + num, "i"), (_, n) => { km = +n; return " "; });
+  s = s.replace(new RegExp("(?:加油)?公升數\\s*" + num, "i"), (_, n) => { liters = +n; return " "; });
+  if (!km) s = s.replace(new RegExp(num + "\\s*(?:公里|km)(?![a-z])", "i"), (_, n) => { km = +n; return " "; });
+  if (!liters) s = s.replace(new RegExp(num + "\\s*(?:公升|升|L)(?![a-z])", "i"), (_, n) => { liters = +n; return " "; });
+  if (km || liters) s = s.replace(/行駛了?|跑了|加了|油錢|油費|花了|共/g, " ");
+  if ((km || liters) && !/加油/.test(s)) s += " 加油 ";
   s = s.replace(/NT\$|\$/gi, " ");
   s = s.replace(/7\s*-\s*11|7-?eleven/gi, "⑦");   // 7-11 是店名，不要當成算式
   const nums = [...s.matchAll(/\d[\d,.]*(?:\s*[+\-*/×÷]\s*\d[\d,.]*)*/g)];
@@ -1745,7 +1790,8 @@ function parseQuick(text){
       sub = Object.entries(cnt).sort((a,b) => b[1]-a[1])[0][0]; subAuto = true;
     }
   }
-  return { type, category, ...(sub ? {sub} : {}), subAuto, newSub, note, account, amount, date };
+  const fuel = (category === "交通" && (km || liters)) ? { ...(km ? {km} : {}), ...(liters ? {liters} : {}) } : {};
+  return { type, category, ...(sub ? {sub} : {}), subAuto, newSub, note, account, amount, date, ...fuel };
 }
 let quickSub = null, quickSubCat = null;   // null＝自動；""＝不指定；其他＝手動選的子類別
 let quickAcc = null;                        // null＝自動（依文字或上次用的帳戶）；其他＝手動點選的帳戶 id
@@ -1799,6 +1845,7 @@ function updateQuick(){
     el("span",{className:"tag "+(p.type==="in"?"in":"out"),textContent:p.type==="in"?"收入":"支出"}),
     el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.subAuto ? "（自動帶入）" : (p.newSub ? "（新子類別）" : ""), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
     el("b",{textContent: p.amount > 0 ? "NT$"+fmt(p.amount) : "（還沒有金額）"}),
+    (p.km || p.liters) ? (fuelEff(p) ? "・" + fuelText(p) : `・${p.km ? fmt(p.km)+" 公里" : "還缺公里數"}・${p.liters ? p.liters+" 公升" : "還缺公升數"}`) : "",
     p.date !== today() ? `・${+p.date.slice(5,7)}/${+p.date.slice(8)}` : ""
   );
 }
