@@ -576,7 +576,7 @@ window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 /* ---------- entry form ---------- */
 /* 各分類的常用備註，點一下就填入 */
 const NOTE_PRESETS = {
-  "餐飲": ["早餐","午餐","晚餐"],
+  "餐飲": ["早餐","午餐","晚餐","點心"],
   "交通": ["加油","保養"],
   "水電瓦斯": ["水費","電費","瓦斯費"]
 };
@@ -614,6 +614,18 @@ function ensureSubcats(){
   S.subcats = { "餐飲": ["麥味登"] };
   applySubToEntries("餐飲", "麥味登");
   return true;
+}
+// 舊紀錄「點心聖瑪莉」這類：備註＝點心＋店名，補成 餐飲・聖瑪莉、備註「點心」
+function fixSnackSubs(){
+  let n = 0;
+  for (const x of S.entries){
+    if (x.type!=="out" || x.category!=="餐飲" || x.sub || !x.note) continue;
+    const m = x.note.match(/^點心\s*(\S+)$/) || x.note.match(/^(\S+?)\s*點心$/);
+    if (!m || /^[\d.,]+$/.test(m[1])) continue;
+    x.sub = m[1]; x.note = "點心"; x.updatedAt = Date.now(); n++;
+    if (!subList("餐飲").includes(m[1])) S.subcats = { ...(S.subcats||{}), "餐飲": [...subList("餐飲"), m[1]] };
+  }
+  return n > 0;
 }
 function addSubcat(c, name){
   name = name.trim(); if (!name) return;
@@ -1426,7 +1438,7 @@ function subscribe(id){
     cloud.ready = true;
     if (first && cloud.uploadLocal){ S.entries = cloud.uploadLocal; cloud.uploadLocal = null; cloudPush(); cloudInfo(`已把這台裝置的 ${S.entries.length} 筆紀錄上傳到雲端。`); }
     for (const e of S.entries) if (!acc(e.account)) e.account = S.accounts[0].id;
-    if (ensureSubcats()) cloudPush();
+    if (ensureSubcats() | fixSnackSubs()) cloudPush();
     saveLocal(); renderAll(); renderChips(); renderCloud();
   };
   cloud.unsubs.push(ref.onSnapshot(snap => {
@@ -1824,7 +1836,7 @@ $("quickGo").onclick = goQuick;
 })();
 
 /* ---------- boot ---------- */
-if (ensureSubcats()) saveLocal();
+if (ensureSubcats() | fixSnackSubs()) saveLocal();
 setType("out"); setFxType("out"); renderAll(); showTab(location.hash.slice(1));
 if (document.readyState === "complete") initCloud(); else addEventListener("load", initCloud);
 })();
