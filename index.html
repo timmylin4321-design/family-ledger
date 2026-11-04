@@ -661,7 +661,23 @@ function fixSnackSubs(){
 }
 // 油耗：km ÷ 公升
 const fuelEff = x => (x && x.km > 0 && x.liters > 0) ? x.km / x.liters : 0;
-const fuelText = x => fuelEff(x) ? `${fmt(x.km)} 公里・${+x.liters.toFixed(2)} 公升・${fuelEff(x).toFixed(1)} km/L` : "";
+const fmtKm = n => (+n).toLocaleString("zh-TW",{maximumFractionDigits:1});
+const fuelText = x => fuelEff(x) ? `${fmtKm(x.km)} 公里・${+x.liters.toFixed(2)} 公升・${fuelEff(x).toFixed(1)} km/L` : "";
+// 舊版沒辨識到的加油（例如 其他「731.8 43.27」1,415）→ 交通・加油，補上公里數與公升數
+function fixFuelEntries(){
+  let n = 0;
+  for (const x of S.entries){
+    if (x.type!=="out" || x.km || !x.note || !(x.amount>0)) continue;
+    if (x.category!=="其他" && x.category!=="交通") continue;
+    const m = x.note.replace(/加油/g," ").trim().match(/^(\d+(?:\.\d+)?)\s*[\s\/,，、]\s*(\d+(?:\.\d+)?)$/);
+    if (!m) continue;
+    let a = +m[1], b = +m[2]; if (!(a>0 && b>0)) continue;
+    if (b > a) [a, b] = [b, a];
+    if (a/b < 3 || a/b > 40) continue;   // 不像油耗的就不動
+    x.category = "交通"; x.note = "加油"; x.km = a; x.liters = b; x.updatedAt = Date.now(); n++;
+  }
+  return n > 0;
+}
 function addSubcat(c, name){
   name = name.trim(); if (!name) return;
   S.subcats = S.subcats || {};
@@ -1414,7 +1430,7 @@ function renderCharts(){
     const effs = fuel.map(fuelEff), best = Math.max(...effs), worst = Math.min(...effs);
     const activeM = new Set(fuel.map(x => x.date.slice(0,7))).size;
     $("fuelHint").textContent = rangeLabel.trim();
-    $("fKm").textContent = fmt(T.km) + " km";
+    $("fKm").textContent = fmtKm(T.km) + " km";
     $("fKmD").textContent = `加油 ${T.n} 次・月平均 ${fmt(Math.round(T.km/activeM))} km`;
     $("fEff").textContent = f1(T.km/T.l) + " km/L";
     $("fEffD").textContent = `最佳 ${f1(best)}・最差 ${f1(worst)}`;
@@ -1438,19 +1454,19 @@ function renderCharts(){
     for (const o of [...byM].reverse()) if (o.n) fm.append(el("tr",{},
       el("td",{textContent:`${o.mo.y}/${o.mo.m}`}),
       el("td",{className:"n",textContent:o.n}),
-      el("td",{className:"n",textContent:fmt(o.km)}),
+      el("td",{className:"n",textContent:fmtKm(o.km)}),
       el("td",{className:"n",textContent:fl(o.l)}),
       el("td",{className:"n",textContent:fmt(o.m)}),
       el("td",{className:"n",textContent:f1(o.km/o.l)}),
       el("td",{className:"n",textContent:f2(o.m/o.km)})));
     fm.append(el("tr",{style:"font-weight:700"},
       el("td",{textContent:"合計"}), el("td",{className:"n",textContent:T.n}),
-      el("td",{className:"n",textContent:fmt(T.km)}), el("td",{className:"n",textContent:fl(T.l)}),
+      el("td",{className:"n",textContent:fmtKm(T.km)}), el("td",{className:"n",textContent:fl(T.l)}),
       el("td",{className:"n",textContent:fmt(T.m)}), el("td",{className:"n",textContent:f1(T.km/T.l)}),
       el("td",{className:"n",textContent:f2(T.m/T.km)})));
     for (const x of fuel) fb.append(el("tr",{},
       el("td",{textContent:`${+x.date.slice(5,7)}/${+x.date.slice(8)}${x.sub ? " "+x.sub : ""}`}),
-      el("td",{className:"n",textContent:fmt(x.km)}),
+      el("td",{className:"n",textContent:fmtKm(x.km)}),
       el("td",{className:"n",textContent:fl(x.liters)}),
       el("td",{className:"n",textContent:fmt(x.amount)}),
       el("td",{className:"n",textContent:f1(fuelEff(x))}),
@@ -1528,7 +1544,7 @@ function subscribe(id){
     cloud.ready = true;
     if (first && cloud.uploadLocal){ S.entries = cloud.uploadLocal; cloud.uploadLocal = null; cloudPush(); cloudInfo(`已把這台裝置的 ${S.entries.length} 筆紀錄上傳到雲端。`); }
     for (const e of S.entries) if (!acc(e.account)) e.account = S.accounts[0].id;
-    if (ensureSubcats() | fixSnackSubs()) cloudPush();
+    if (ensureSubcats() | fixSnackSubs() | fixFuelEntries()) cloudPush();
     saveLocal(); renderAll(); renderChips(); renderCloud();
   };
   cloud.unsubs.push(ref.onSnapshot(snap => {
@@ -1771,6 +1787,7 @@ function parseQuick(text){
   else if (/前天/.test(s)){ date = shiftDay(-2); s = s.replace(/前天/g, " "); }
   // 加油：「行駛 350 公里、30 公升、油錢 1500」→ 記下公里數與公升數，算油耗
   let km = 0, liters = 0;
+  s = s.replace(/(\d),(?=\d{3}(?!\d))/g, "$1");   // 1,415 → 1415
   const num = "(\\d+(?:\\.\\d+)?)";
   s = s.replace(new RegExp("(?:行駛)?(?:公里數|里程數?)\\s*" + num, "i"), (_, n) => { km = +n; return " "; });
   s = s.replace(new RegExp("(?:加油)?公升數\\s*" + num, "i"), (_, n) => { liters = +n; return " "; });
@@ -1908,7 +1925,7 @@ function updateQuick(){
     el("span",{className:"tag "+(p.type==="in"?"in":"out"),textContent:p.type==="in"?"收入":"支出"}),
     el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.subAuto ? "（自動帶入）" : (p.newSub ? "（新子類別）" : ""), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
     el("b",{textContent: p.amount > 0 ? "NT$"+fmt(p.amount) : "（還沒有金額）"}),
-    (p.km || p.liters) ? (fuelEff(p) ? "・" + fuelText(p) : `・${p.km ? fmt(p.km)+" 公里" : "還缺公里數"}・${p.liters ? p.liters+" 公升" : "還缺公升數"}`) : "",
+    (p.km || p.liters) ? (fuelEff(p) ? "・" + fuelText(p) : `・${p.km ? fmtKm(p.km)+" 公里" : "還缺公里數"}・${p.liters ? p.liters+" 公升" : "還缺公升數"}`) : "",
     p.date !== today() ? `・${+p.date.slice(5,7)}/${+p.date.slice(8)}` : ""
   );
 }
@@ -1946,7 +1963,7 @@ $("quickGo").onclick = goQuick;
 })();
 
 /* ---------- boot ---------- */
-if (ensureSubcats() | fixSnackSubs()) saveLocal();
+if (ensureSubcats() | fixSnackSubs() | fixFuelEntries()) saveLocal();
 setType("out"); setFxType("out"); renderAll(); showTab(location.hash.slice(1));
 if (document.readyState === "complete") initCloud(); else addEventListener("load", initCloud);
 })();
