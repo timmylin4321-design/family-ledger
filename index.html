@@ -546,6 +546,12 @@ const $ = id => document.getElementById(id);
 const fmt = n => (n<0?"-":"") + Math.abs(Math.round(n)).toLocaleString("zh-TW");
 const pad = n => String(n).padStart(2,"0");
 const today = () => { const d=new Date(); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; };
+// 記帳預設日期：看的是本月就用今天；切到過去的月份用該月最後一天，未來的月份用 1 號
+const defaultDate = () => {
+  const t = today(), k = `${ym.y}-${pad(ym.m)}`;
+  if (t.startsWith(k)) return t;
+  return k < t.slice(0,7) ? `${k}-${pad(new Date(ym.y, ym.m, 0).getDate())}` : `${k}-01`;
+};
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 const WD = ["日","一","二","三","四","五","六"];
 const el = (tag, props={}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
@@ -1102,6 +1108,7 @@ function setMonthEndBalance(id, target){
 
 function renderAll(){
   $("monthLabel").textContent = `${ym.y} / ${pad(ym.m)}`;
+  if (!editId && !String($("date").value).startsWith(`${ym.y}-${pad(ym.m)}`)) $("date").value = defaultDate();
   fillAccSelect($("fAcc")); fillAccSelect($("fTo")); fillAccSelect($("fxAcc")); fillAccSelect($("filterAcc"), "全部帳戶");
   if (filterAcc && !acc(filterAcc)) filterAcc="";
   $("filterAcc").value = filterAcc;
@@ -1782,7 +1789,7 @@ const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function parseQuick(text){
   let s = " " + String(text).trim() + " ";
   if (!s.trim()) return null;
-  let date = today();
+  let date = defaultDate();
   if (/昨天/.test(s)){ date = shiftDay(-1); s = s.replace(/昨天/g, " "); }
   else if (/前天/.test(s)){ date = shiftDay(-2); s = s.replace(/前天/g, " "); }
   else {
