@@ -288,6 +288,7 @@ tfoot td{font-weight:700;background:var(--bg)}
           <button type="button" class="primary small" id="quickGo" disabled>記下</button>
         </div>
         <div class="quickprev" id="quickPrev">可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。</div>
+        <div class="chips subchips" id="quickAccs" role="group" aria-label="快速記帳的付款方式"></div>
         <div class="chips subchips" id="quickSubs" role="group" aria-label="快速記帳的子類別" hidden></div>
         <div class="quickmsg" id="quickMsg" hidden></div>
         <div class="favlabel">常用（點一下直接記）</div>
@@ -1638,7 +1639,7 @@ function renderFavs(){
     b.onclick = () => quickAdd({ type:x.type, category:x.category, ...(x.sub ? {sub:x.sub} : {}), amount:x.amount, account: acc(x.account) ? x.account : S.accounts[0].id, note:x.note||"", date:today() });
     box.append(b);
   }
-  if ($("quickInput").value.trim()) updateQuick();
+  if ($("quickInput").value.trim()) updateQuick(); else renderQuickAccs(null);
 }
 
 const OUT_KW = [
@@ -1667,6 +1668,7 @@ function parseQuick(text){
   if (/昨天/.test(s)){ date = shiftDay(-1); s = s.replace(/昨天/g, " "); }
   else if (/前天/.test(s)){ date = shiftDay(-2); s = s.replace(/前天/g, " "); }
   s = s.replace(/NT\$|\$/gi, " ");
+  s = s.replace(/7\s*-\s*11|7-?eleven/gi, "⑦");   // 7-11 是店名，不要當成算式
   const nums = [...s.matchAll(/\d[\d,.]*(?:\s*[+\-*/×÷]\s*\d[\d,.]*)*/g)];
   const m = nums.pop();
   const amount = m ? calcEval(m[0]) : NaN;
@@ -1683,10 +1685,16 @@ function parseQuick(text){
     const re = new RegExp(esc(c), "i");
     if (re.test(s)){ account = id; s = s.replace(re, " "); break; }
   }
-  let note = s.replace(/\s+/g, " ").trim(), type = "out", category = null, sub = "";
+  let note = s.replace(/⑦/g, "7-11").replace(/\s+/g, " ").trim(), type = "out", category = null, sub = "";
+  const note0 = note;
   if (S.subcats) for (const [c, names] of Object.entries(S.subcats)) {
     for (const n of names || []) if (n && note.includes(n)){ category = c; sub = n; type = CATS.in.includes(c) && !CATS.out.includes(c) ? "in" : "out"; note = note.replace(n, " ").replace(/\s+/g," ").trim(); break; }
     if (sub) break;
+  }
+  // 剩下的字明顯屬於別的分類（例如「全家 衛生紙」），就不套用子類別
+  if (sub && note){
+    const kw = OUT_KW.find(([re]) => re.test(note));
+    if (kw && kw[1] !== category){ category = null; sub = ""; type = "out"; note = note0; }
   }
   for (const [t, list] of [["out", CATS.out], ["in", CATS.in]]){
     for (const c of list) if (note === c || note.startsWith(c + " ")){ type = t; category = c; note = note.slice(c.length).trim(); break; }
@@ -1702,6 +1710,18 @@ function parseQuick(text){
     }
   }
   if (!category) category = "其他";
+  // 備註含「早餐／加油／電費…」這類固定用詞時，剩下的字就當子類別（沒有的會自動新增），順序不限
+  let newSub = false;
+  if (!sub && type === "out"){
+    const pw = (NOTE_PRESETS[category] || []).find(w => note.includes(w));
+    if (pw){
+      const rest = note.replace(pw, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+      if (rest.length && /\S/.test(rest[0]) && !/^[\d.,]+$/.test(rest[0])){
+        sub = rest[0]; newSub = !subList(category).includes(sub);
+        note = [pw, ...rest.slice(1)].join(" ");
+      }
+    }
+  }
   if (!account) account = accFor(category) || $("fAcc").value || S.accounts[0].id;
   // 沒寫子類別時，依過去同分類、同備註的紀錄自動帶入最常用的子類別
   let subAuto = false;
@@ -1713,11 +1733,32 @@ function parseQuick(text){
       sub = Object.entries(cnt).sort((a,b) => b[1]-a[1])[0][0]; subAuto = true;
     }
   }
-  return { type, category, ...(sub ? {sub} : {}), subAuto, note, account, amount, date };
+  return { type, category, ...(sub ? {sub} : {}), subAuto, newSub, note, account, amount, date };
 }
 let quickSub = null, quickSubCat = null;   // null＝自動；""＝不指定；其他＝手動選的子類別
+let quickAcc = null;                        // null＝自動（依文字或上次用的帳戶）；其他＝手動點選的帳戶 id
+const QUICK_ACCS = [["現金", /現金/], ["Richart", /richart/i], ["遠東", /遠東/]];
+function quickAccList(){
+  return QUICK_ACCS.map(([label, re]) => ({ label, a: S.accounts.find(a => re.test(a.name)) }));
+}
+function renderQuickAccs(p){
+  const box = $("quickAccs"); box.textContent = "";
+  box.append(el("span",{className:"lbl",textContent:"付款"}));
+  const cur = quickAcc || (p ? p.account : null);
+  for (const {label, a} of quickAccList()){
+    const b = el("button",{type:"button",className:"chip",textContent:label});
+    b.setAttribute("aria-pressed", String(!!a && a.id===cur));
+    b.onclick = () => {
+      let id = a && a.id;
+      if (!id){ const n = { id:uid(), name:label, init:0 }; S.accounts.push(n); persist(); renderAll(); id = n.id; }
+      quickAcc = quickAcc===id ? null : id; updateQuick();
+    };
+    box.append(b);
+  }
+}
 function getQuick(){
   const p = parseQuick($("quickInput").value);
+  if (p && quickAcc && acc(quickAcc)) p.account = quickAcc;
   if (!p) return p;
   if (quickSubCat !== p.category) quickSub = null;
   if (quickSub !== null){ if (quickSub) p.sub = quickSub; else delete p.sub; p.subAuto = false; }
@@ -1738,13 +1779,13 @@ function renderQuickSubs(p){
 }
 function updateQuick(){
   const p = getQuick(), box = $("quickPrev");
-  renderQuickSubs(p);
+  renderQuickSubs(p); renderQuickAccs(p);
   box.textContent = "";
   $("quickGo").disabled = !(p && p.amount > 0);
   if (!p){ box.textContent = "可以打字或按鍵盤上的麥克風用說的。支援「昨天」「前天」和算式，例如「晚餐 120+80」。"; return; }
   box.append(
     el("span",{className:"tag "+(p.type==="in"?"in":"out"),textContent:p.type==="in"?"收入":"支出"}),
-    el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.subAuto ? "（自動帶入）" : "", p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
+    el("b",{textContent:p.category + (p.sub ? "・"+p.sub : "")}), p.subAuto ? "（自動帶入）" : (p.newSub ? "（新子類別）" : ""), p.note ? `・${p.note}` : "", `・${accName(p.account)}・`,
     el("b",{textContent: p.amount > 0 ? "NT$"+fmt(p.amount) : "（還沒有金額）"}),
     p.date !== today() ? `・${+p.date.slice(5,7)}/${+p.date.slice(8)}` : ""
   );
@@ -1752,8 +1793,11 @@ function updateQuick(){
 function goQuick(){
   const p = getQuick();
   if (!p || !(p.amount > 0)) return;
-  delete p.subAuto;
-  quickAdd(p); $("quickInput").value = ""; quickSub = null; quickSubCat = null; updateQuick();
+  const isNew = p.newSub && p.sub && !subList(p.category).includes(p.sub);
+  delete p.subAuto; delete p.newSub;
+  if (isNew){ S.subcats = { ...(S.subcats||{}), [p.category]: [...subList(p.category), p.sub] }; }
+  quickAdd(p); $("quickInput").value = ""; quickSub = null; quickSubCat = null; quickAcc = null; updateQuick();
+  if (isNew) renderChips();
 }
 $("quickInput").addEventListener("input", updateQuick);
 $("quickInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing){ e.preventDefault(); goQuick(); } });
