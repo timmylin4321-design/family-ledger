@@ -1785,6 +1785,20 @@ function parseQuick(text){
   let date = today();
   if (/昨天/.test(s)){ date = shiftDay(-1); s = s.replace(/昨天/g, " "); }
   else if (/前天/.test(s)){ date = shiftDay(-2); s = s.replace(/前天/g, " "); }
+  else {
+    // 指定日期：「9/1」「10月21日」「2026/9/14」（後面還要有數字才算日期，避免和算式混淆）
+    const dm = s.match(/(\s)(?:(\d{4})[\/年])?(\d{1,2})[\/月](\d{1,2})[日號]?(?=\s)/);
+    if (dm){
+      const mo = +dm[3], dd = +dm[4];
+      const rest = s.slice(0, dm.index) + " " + s.slice(dm.index + dm[0].length);
+      if (mo>=1 && mo<=12 && dd>=1 && dd<=31 && /\d/.test(rest)){
+        let y = dm[2] ? +dm[2] : +today().slice(0,4);
+        let d = `${y}-${pad(mo)}-${pad(dd)}`;
+        if (!dm[2] && d > today()) d = `${y-1}-${pad(mo)}-${pad(dd)}`;
+        date = d; s = rest;
+      }
+    }
+  }
   // 加油：「行駛 350 公里、30 公升、油錢 1500」→ 記下公里數與公升數，算油耗
   let km = 0, liters = 0;
   s = s.replace(/(\d),(?=\d{3}(?!\d))/g, "$1");   // 1,415 → 1415
@@ -1794,7 +1808,12 @@ function parseQuick(text){
   if (!km) s = s.replace(new RegExp(num + "\\s*(?:公里|km)(?![a-z])", "i"), (_, n) => { km = +n; return " "; });
   if (!liters) s = s.replace(new RegExp(num + "\\s*(?:公升|升|L)(?![a-z])", "i"), (_, n) => { liters = +n; return " "; });
   // 只打數字：「加油 350 30 1500」＝ 公里 公升 油錢（也可用 / 或 、 隔開；只打三個數字也算加油）
-  if (!km && !liters && (/加油/.test(s) || /^[\s\d.\/,，、]+$/.test(s))){
+  const bareNums = S.accounts.reduce((t, a) => {
+    const core = a.name.replace(/[（(].*$/, "").trim();
+    for (const c of [a.name, core, core.replace(/(銀行|商銀)$/, "")]) if (c && c.length >= 2) t = t.split(c).join(" ");
+    return t;
+  }, s);
+  if (!km && !liters && (/加油/.test(s) || /^[\s\d.\/,，、]+$/.test(bareNums))){
     const m3 = s.match(/(?<![\d.\-])()(\d+(?:\.\d+)?)\s*[\s\/,，、]\s*(\d+(?:\.\d+)?)\s*[\s\/,，、]\s*(\d+(?:\.\d+)?)(?=\s|$)/);
     if (m3 && +m3[2] > 0 && +m3[3] > 0){
       km = +m3[2]; liters = +m3[3];
