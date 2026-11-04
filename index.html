@@ -144,6 +144,21 @@ input[type=date],input[type=text],input[type=number],select{font:inherit;color:v
 .kpis.kpis4>div:nth-child(n+4){border-top:0}
 .kpis.kpis4>div:nth-child(4){border-left:1px solid var(--line)}
 @media (max-width:620px){.fuelmonth th:nth-child(2),.fuelmonth td:nth-child(2),.fuelmonth th:nth-child(4),.fuelmonth td:nth-child(4){display:none}}
+.vimp{margin-top:10px}
+.vimp>summary{padding:12px 16px;cursor:pointer;font-size:.9rem;color:var(--muted)}
+.vbody{padding:0 16px 14px;display:flex;flex-direction:column;gap:10px}
+.vtop{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.vtop .field{flex:1 1 12em}
+.vpick{cursor:pointer;white-space:nowrap;padding:9px 16px}
+.vprog{display:flex;align-items:center;gap:10px;font-size:.85rem;color:var(--muted);flex-wrap:wrap}
+.vprog progress{flex:1 1 8em;accent-color:var(--accent)}
+.vhead{display:flex;justify-content:space-between;align-items:center;font-size:.85rem;color:var(--muted);gap:8px;flex-wrap:wrap}
+.vrow{display:grid;grid-template-columns:auto 4.6em 1fr 6em;gap:6px 8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.vrow input[type=text]{padding:5px 7px}
+.vrow .vamt{text-align:right;font-family:var(--f-num)}
+.vrow select{grid-column:2/4;padding:5px 7px}
+.vrow .vnote{grid-column:4;font-size:.75rem;color:var(--warn);text-align:right}
+.vrow.off{opacity:.45}
 .fueldetail summary{padding:12px 16px;cursor:pointer;font-size:.9rem;color:var(--muted)}
 .fueldetail .tablebox{border-top:1px solid var(--line)}
 .subtable td:nth-child(2){white-space:normal}
@@ -301,6 +316,23 @@ tfoot td{font-weight:700;background:var(--bg)}
         <div class="favlabel">常用（點一下直接記）</div>
         <div class="chips favs" id="favChips"></div>
       </div>
+      <details class="panel vimp" id="vImp">
+        <summary>從螢幕錄影匯入信用卡消費</summary>
+        <div class="vbody">
+          <div class="quickprev">在信用卡 App 打開消費明細，螢幕錄影時慢慢往下捲，再把影片選進來（也可以選多張截圖）。會自動辨識日期、商家、金額，確認後再匯入。辨識在手機上進行，影片不會上傳。</div>
+          <div class="vtop">
+            <label class="field"><span class="flabel">付款帳戶</span><select id="vAcc" aria-label="這批消費的付款帳戶"></select></label>
+            <label class="primary small vpick">選擇影片／截圖<input type="file" id="vFile" accept="video/*,image/*" multiple hidden></label>
+          </div>
+          <div class="vprog" id="vProg" hidden><progress id="vBar" max="1" value="0"></progress><span id="vMsg"></span><button type="button" class="linkbtn" id="vStop">停止</button></div>
+          <video id="vVid" muted playsinline preload="auto" hidden></video>
+          <div id="vResult" hidden>
+            <div class="vhead"><label><input type="checkbox" id="vAll" checked> 全選</label><span id="vSum"></span></div>
+            <div id="vList"></div>
+            <div class="actions" style="margin-top:10px"><button type="button" class="ghost small" id="vClear">清除</button><button type="button" class="primary small" id="vImport">匯入</button></div>
+          </div>
+        </div>
+      </details>
       <h2 id="formTitle">記一筆</h2>
       <form class="panel" id="form" autocomplete="off">
         <div class="seg" role="group" aria-label="收支類型">
@@ -1109,7 +1141,7 @@ function setMonthEndBalance(id, target){
 function renderAll(){
   $("monthLabel").textContent = `${ym.y} / ${pad(ym.m)}`;
   if (!editId && !String($("date").value).startsWith(`${ym.y}-${pad(ym.m)}`)) $("date").value = defaultDate();
-  fillAccSelect($("fAcc")); fillAccSelect($("fTo")); fillAccSelect($("fxAcc")); fillAccSelect($("filterAcc"), "全部帳戶");
+  fillAccSelect($("vAcc")); fillAccSelect($("fAcc")); fillAccSelect($("fTo")); fillAccSelect($("fxAcc")); fillAccSelect($("filterAcc"), "全部帳戶");
   if (filterAcc && !acc(filterAcc)) filterAcc="";
   $("filterAcc").value = filterAcc;
   renderLedger(); renderAccounts(); renderFixed(); renderCharts(); renderFavs();
@@ -1768,7 +1800,7 @@ function renderFavs(){
 }
 
 const OUT_KW = [
-  [/早餐|午餐|晚餐|宵夜|便當|飲料|咖啡|聚餐|外送|點心|下午茶/, "餐飲"],
+  [/早餐|午餐|晚餐|宵夜|便當|飲料|咖啡|聚餐|外送|點心|下午茶|uber ?eats|foodpanda|熊貓|星巴克|starbucks|路易莎|cama|麥當勞|肯德基|摩斯|漢堡王|必勝客|達美樂|85度c|清心|五十嵐|50嵐|可不可|迷客夏|麥味登|美而美|拉亞|餐廳|小吃|麵|飯|鍋|燒肉|壽司/i, "餐飲"],
   [/加油|保養|停車|捷運|高鐵|台鐵|火車|公車|計程車|uber|etag|過路費|洗車|機車/i, "交通"],
   [/水費|電費|瓦斯/, "水電瓦斯"],
   [/全聯|好市多|costco|家樂福|衛生紙|洗衣精|超商|7-?11|全家/i, "日用品"],
@@ -1776,7 +1808,7 @@ const OUT_KW = [
   [/看診|掛號|藥|醫院|診所|牙醫|化療/, "醫療"],
   [/房租|房貸/, "房租房貸"],
   [/保費|保險/, "保險"],
-  [/電影|旅遊|ktv|門票|遊樂/i, "娛樂"],
+  [/電影|旅遊|ktv|門票|遊樂|netflix|spotify|disney|youtube|kkbox|steam|威秀|秀泰/i, "娛樂"],
   [/飼料|寵物|豆豆|獸醫/, "寵物"],
   [/學費|補習|書/, "教育"],
   [/孝親|紅包|家用/, "孝親"],
@@ -1987,6 +2019,239 @@ $("quickGo").onclick = goQuick;
   };
   tryAuto(0);
 })();
+
+/* ---------- 螢幕錄影／截圖辨識信用卡消費（Tesseract.js，在手機上辨識） ---------- */
+const TESS_SRC = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+const V_ACC_KEY = KEY + "-vacc";
+let vWorker = null, vStopFlag = false, vRows = [], vBusy = false;
+const vMsg = t => { $("vMsg").textContent = t; };
+function loadScript(src){ return new Promise((ok, bad) => { const sc = document.createElement("script"); sc.src = src; sc.onload = ok; sc.onerror = () => bad(new Error("無法下載辨識元件，請確認網路")); document.head.append(sc); }); }
+async function getOcr(){
+  if (vWorker) return vWorker;
+  if (!window.Tesseract){ vMsg("下載辨識元件…"); await loadScript(TESS_SRC); }
+  vMsg("載入中文辨識資料…（第一次需要下載，之後會記住）");
+  vWorker = await Tesseract.createWorker("chi_tra+eng", 1, { logger: m => { if (/loading|initializ/.test(m.status||"") && m.progress != null) vMsg(`載入辨識資料… ${Math.round(m.progress*100)}%`); } });
+  await vWorker.setParameters({ preserve_interword_spaces: "1" });
+  return vWorker;
+}
+// 灰階化；深色背景自動反白，讓文字變成白底黑字
+function prepCanvas(c){
+  const ctx = c.getContext("2d", { willReadFrequently:true });
+  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
+  let sum = 0;
+  for (let i=0; i<d.length; i+=4){ const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]; d[i]=d[i+1]=d[i+2]=g; sum += g; }
+  if (sum / (d.length/4) < 110) for (let i=0; i<d.length; i+=4){ d[i]=d[i+1]=d[i+2]=255-d[i]; }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+function thumbSig(src){
+  const t = document.createElement("canvas"); t.width = 24; t.height = 48;
+  const x = t.getContext("2d", { willReadFrequently:true }); x.drawImage(src, 0, 0, 24, 48);
+  const d = x.getImageData(0, 0, 24, 48).data, out = [];
+  for (let i=0; i<d.length; i+=4) out.push((d[i]+d[i+1]+d[i+2])/3);
+  return out;
+}
+const sigDiff = (a, b) => a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0) / a.length / 255;
+function frameCanvas(src, w, h){
+  const W = Math.min(1100, w), H = Math.round(h * W / w);
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  c.getContext("2d", { willReadFrequently:true }).drawImage(src, 0, 0, W, H);
+  return c;
+}
+const seekTo = (v, t) => new Promise(ok => { const h = () => { v.removeEventListener("seeked", h); ok(); }; v.addEventListener("seeked", h); v.currentTime = t; });
+async function videoFrames(file, onFrame, onProgress){
+  const v = $("vVid"), url = URL.createObjectURL(file);
+  try {
+    v.src = url;
+    await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error("這個影片格式無法讀取")); v.load(); });
+    try { await v.play(); v.pause(); } catch {}
+    const dur = v.duration, step = 0.7, n = Math.max(1, Math.ceil(dur / step));
+    let prev = null;
+    for (let i=0; i<=n && !vStopFlag; i++){
+      await seekTo(v, Math.min(Math.max(dur - 0.05, 0), i * step));
+      onProgress(i / n);
+      const sig = thumbSig(v);
+      if (prev && sigDiff(prev, sig) < 0.015) continue;   // 畫面幾乎沒動就跳過
+      prev = sig;
+      await onFrame(frameCanvas(v, v.videoWidth, v.videoHeight));
+    }
+  } finally { v.removeAttribute("src"); v.load(); URL.revokeObjectURL(url); }
+}
+async function imageFrame(file){
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    return frameCanvas(img, img.naturalWidth, img.naturalHeight);
+  } finally { URL.revokeObjectURL(url); }
+}
+// 年份推算：沒寫年份時用今年，比今天還晚就算去年
+function cardDate(y, m, d){
+  if (!(m>=1 && m<=12 && d>=1 && d<=31)) return null;
+  if (y) return `${y}-${pad(m)}-${pad(d)}`;
+  const t = today(), yy = +t.slice(0,4); let s = `${yy}-${pad(m)}-${pad(d)}`;
+  if (s > t) s = `${yy-1}-${pad(m)}-${pad(d)}`;
+  return s;
+}
+const V_SKIP = /繳款|應繳|本期|上期|帳單|額度|可用|回饋|點數|合計|總計|最低|循環|利息|年費|自動扣|已入帳金額|消費明細|交易明細|信用卡$|卡號|搜尋|篩選/;
+function parseCardText(text, frame){
+  const seq = []; let pending = "";
+  const lines = text.split(/\n/).map(l => l.replace(/[|｜¦]/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean);
+  for (const raw of lines){
+    let l = raw, d = null;
+    const m1 = l.match(/(20\d{2})\s*[\/.\-年]\s*(\d{1,2})\s*[\/.\-月]\s*(\d{1,2})\s*日?/);
+    const m2 = !m1 && l.match(/(?<![\d,.$])(\d{1,2})\s*[\/月]\s*(\d{1,2})\s*日?(?![\d,])/);
+    if (m1){ d = cardDate(+m1[1], +m1[2], +m1[3]); if (d) l = l.replace(m1[0], " "); }
+    else if (m2){ d = cardDate(0, +m2[1], +m2[2]); if (d) l = l.replace(m2[0], " "); }
+    const lineDate = d;
+    l = l.replace(/\d{1,2}:\d{2}(:\d{2})?/g, " ").replace(/[*＊xX]{2,}\s*\d{4}/g, " ").replace(/[（(][一二三四五六日][)）]|星期.|週./g, " ");
+    if (V_SKIP.test(l)){ pending = ""; if (lineDate) seq.push({ t:"D", d:lineDate }); continue; }
+    // 金額：取最後一個像金額的數字（有 NT$／$／元、千分位，或在行尾）
+    const toks = [...l.matchAll(/([-−－–]?)\s*(NT\$|NTD|TWD|\$|＄)?\s*([-−－–]?)\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s*(元)?/gi)];
+    let pick = null;
+    for (const t of toks){
+      const hasCur = !!(t[2] || t[6]), hasComma = t[4].includes(","), atEnd = (t.index + t[0].length) >= l.trimEnd().length - 1;
+      if (hasCur || hasComma || atEnd) pick = t;
+    }
+    const name = (pick ? l.slice(0, pick.index) + " " + l.slice(pick.index + pick[0].length) : l)
+      .replace(/[7T]\s*[-–]?\s*ELEVEN/gi, "7-ELEVEN").replace(/(^|\s)[\d.,:\/\-−－–$＄]+(?=\s|$)/g, " ").replace(/\b(NT[S$5]?|NTD|TWD|TW|TWN)\b/gi, " ").replace(/[^\p{L}\p{N}&＆()（）·.\- ]/gu, " ").replace(/\s+/g, " ").trim();
+    const hasName = (name.match(/[\p{Script=Han}]/gu) || []).length >= 2 || /[A-Za-z]{4,}/.test(name);
+    if (!pick){ if (lineDate) seq.push({ t:"D", d:lineDate }); else if (hasName) pending = name; continue; }
+    const amt = +(pick[4].replace(/,/g, "") + (pick[5] ? "." + pick[5] : ""));
+    if (!(amt > 0) || amt > 2000000){ if (lineDate) seq.push({ t:"D", d:lineDate }); continue; }
+    const neg = !!(pick[1] || pick[3]);
+    const merchant = hasName ? name : pending;
+    if (!merchant){ if (lineDate) seq.push({ t:"D", d:lineDate }); continue; }
+    seq.push({ t:"R", date: lineDate, merchant, amount: Math.round(amt), refund: neg, frame });
+    pending = "";
+  }
+  // 日期在商家上面（分組標題）還是下面（每筆的小字）？從整個畫面的排列判斷
+  const after = seq.length > 1 && (seq[0].t === "R" || seq[seq.length-1].t === "D");
+  let cur = null;
+  if (after){
+    for (let i=seq.length-1; i>=0; i--){ const x = seq[i]; if (x.t === "D") cur = x.d; else if (!x.date){ x.date = cur; cur = null; } }
+  } else {
+    for (const x of seq){ if (x.t === "D") cur = x.d; else if (!x.date) x.date = cur; }
+  }
+  return seq.filter(x => x.t === "R").map(({ t, ...r }) => r);
+}
+const normName = s => s.replace(/\s+/g, "");
+function similar(a, b){
+  a = normName(a); b = normName(b);
+  if (!a || !b) return false;
+  if (a.includes(b) || b.includes(a)) return true;
+  const A = new Set(a), B = new Set(b); let n = 0; for (const c of A) if (B.has(c)) n++;
+  return n / Math.min(A.size, B.size) >= 0.6;
+}
+function mergeRows(found){
+  for (const r of found){
+    const same = vRows.find(x => x.frame !== r.frame && x.amount === r.amount && x.refund === r.refund && (x.date === r.date || !x.date || !r.date) && similar(x.merchant, r.merchant));
+    if (same){
+      if (!same.date && r.date) same.date = r.date;
+      if (r.merchant.length > same.merchant.length && r.merchant.length <= 24) same.merchant = r.merchant;
+      same.frame = r.frame;
+      continue;
+    }
+    vRows.push({ ...r });
+  }
+}
+function guessCat(r){
+  if (r.refund) return { category:"退款", sub:"" };
+  const p = parseQuick(`${r.merchant} 1`);
+  let category = p && CATS.out.includes(p.category) ? p.category : "其他";
+  let sub = p && p.sub && !p.newSub && subList(category).includes(p.sub) ? p.sub : "";
+  return { category, sub };
+}
+function finishRows(){
+  // 沒對到日期、而且同金額已有別筆的，多半是捲動中被切到一半的重複畫面
+  vRows = vRows.filter(r => r.date || !vRows.some(x => x !== r && x.date && x.amount === r.amount));
+  for (const r of vRows){
+    if (!r.date) r.date = defaultDate();
+    if (!r.category){ const g = guessCat(r); r.category = g.category; r.sub = g.sub; }
+    r.dup = S.entries.some(x => x.date === r.date && Math.abs(x.amount) === r.amount && (x.type === "out" || x.type === "in"));
+    if (r.on === undefined) r.on = !r.dup && !r.refund;
+  }
+  vRows.sort((a, b) => b.date.localeCompare(a.date));
+  renderVRows();
+}
+function renderVRows(){
+  const box = $("vList"); box.textContent = "";
+  $("vResult").hidden = !vRows.length;
+  vRows.forEach((r, i) => {
+    const row = el("div", { className: "vrow" + (r.on ? "" : " off") });
+    const cb = el("input", { type:"checkbox", checked: r.on, ariaLabel:"匯入這筆" });
+    cb.onchange = () => { r.on = cb.checked; row.classList.toggle("off", !r.on); vSummary(); };
+    const dt = el("input", { type:"text", value: `${+r.date.slice(5,7)}/${+r.date.slice(8)}`, inputMode:"numeric", ariaLabel:"日期" });
+    dt.onchange = () => { const m = dt.value.match(/(\d{1,2})\D+(\d{1,2})/); const d = m && cardDate(0, +m[1], +m[2]); if (d) r.date = d; dt.value = `${+r.date.slice(5,7)}/${+r.date.slice(8)}`; };
+    const nm = el("input", { type:"text", value: r.merchant, ariaLabel:"商家" });
+    nm.onchange = () => { r.merchant = nm.value.trim(); };
+    const am = el("input", { type:"text", className:"vamt", value: (r.refund ? "+" : "") + fmt(r.amount), inputMode:"decimal", ariaLabel:"金額" });
+    am.onchange = () => { const v = parseAmount(am.value.replace(/^\+/, "")); if (v > 0) r.amount = v; am.value = (r.refund ? "+" : "") + fmt(r.amount); vSummary(); };
+    const sel = el("select", { ariaLabel:"分類" });
+    const list = r.refund ? CATS.in : CATS.out;
+    for (const c of list) for (const sname of ["", ...subList(c)]) sel.append(new Option(sname ? `${c}・${sname}` : c, c + "|" + sname));
+    sel.value = r.category + "|" + (r.sub || "");
+    if (!sel.value) sel.value = (r.refund ? "退款" : "其他") + "|";
+    sel.onchange = () => { [r.category, r.sub] = sel.value.split("|"); };
+    const note = el("span", { className:"vnote", textContent: r.dup ? "可能已記過" : r.refund ? "退款" : "" });
+    row.append(cb, dt, nm, am, sel, note);
+    box.append(row);
+  });
+  vSummary();
+}
+function vSummary(){
+  const on = vRows.filter(r => r.on);
+  const tot = on.reduce((s, r) => s + (r.refund ? -r.amount : r.amount), 0);
+  $("vSum").textContent = `辨識到 ${vRows.length} 筆，勾選 ${on.length} 筆・合計 NT$${fmt(tot)}`;
+  $("vImport").disabled = !on.length;
+  $("vImport").textContent = on.length ? `匯入 ${on.length} 筆` : "匯入";
+  $("vAll").checked = on.length === vRows.length;
+}
+$("vAll").onchange = () => { for (const r of vRows) r.on = $("vAll").checked; renderVRows(); };
+$("vClear").onclick = () => { vRows = []; renderVRows(); $("vMsg").textContent = ""; };
+$("vStop").onclick = () => { vStopFlag = true; vMsg("停止中…"); };
+try { const a = localStorage.getItem(V_ACC_KEY); if (a) setTimeout(() => { if (acc(a)) $("vAcc").value = a; }, 0); } catch {}
+$("vAcc").onchange = () => { try { localStorage.setItem(V_ACC_KEY, $("vAcc").value); } catch {} };
+$("vImport").onclick = () => {
+  const account = $("vAcc").value || S.accounts[0].id, on = vRows.filter(r => r.on);
+  if (!on.length) return;
+  for (const r of on){
+    S.entries.push({ id:uid(), type: r.refund ? "in" : "out", category: r.category, ...(r.sub ? { sub:r.sub } : {}), amount: r.amount, account, note: r.merchant, date: r.date, createdAt: Date.now() });
+  }
+  persist();
+  const last = on[0].date.split("-"); ym = { y:+last[0], m:+last[1] };
+  vRows = vRows.filter(r => !r.on); renderAll(); renderVRows();
+  flash(`已匯入 ${on.length} 筆到 ${accName(account)}`, false, "vMsg"); $("vProg").hidden = false; $("vBar").hidden = true; $("vStop").hidden = true;
+};
+$("vFile").onchange = async () => {
+  const files = [...$("vFile").files]; $("vFile").value = "";
+  if (!files.length || vBusy) return;
+  vBusy = true; vStopFlag = false;
+  $("vProg").hidden = false; $("vBar").hidden = false; $("vStop").hidden = false; $("vBar").value = 0;
+  let frames = 0, before = vRows.length;
+  try {
+    const ocr = await getOcr();
+    const doFrame = async c => {
+      frames++;
+      const { data } = await ocr.recognize(prepCanvas(c));
+      mergeRows(parseCardText(data.text || "", frames));
+      vMsg(`辨識中… 已讀 ${frames} 個畫面，找到 ${vRows.length} 筆`);
+    };
+    for (let f=0; f<files.length && !vStopFlag; f++){
+      const file = files[f];
+      if (/^video\//.test(file.type) || /\.(mov|mp4|m4v|webm)$/i.test(file.name)){
+        await videoFrames(file, doFrame, p => { $("vBar").value = (f + p) / files.length; });
+      } else {
+        await doFrame(await imageFrame(file)); $("vBar").value = (f + 1) / files.length;
+      }
+    }
+    finishRows();
+    vMsg(vRows.length > before ? `完成：找到 ${vRows.length - before} 筆，請確認後匯入。日期、商家、金額、分類都可以點來修改。` : "沒有辨識到消費紀錄。錄影時請放慢捲動速度，讓每一行都清楚停留一下。");
+  } catch (e) {
+    vMsg("辨識失敗：" + (e && e.message || e));
+  } finally {
+    vBusy = false; $("vBar").value = 1; $("vStop").hidden = true;
+  }
+};
 
 /* ---------- boot ---------- */
 if (ensureSubcats() | fixSnackSubs() | fixFuelEntries()) saveLocal();
