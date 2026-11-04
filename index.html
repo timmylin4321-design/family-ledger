@@ -2037,10 +2037,31 @@ async function getOcr(){
 // 灰階化；深色背景自動反白，讓文字變成白底黑字
 function prepCanvas(c){
   const ctx = c.getContext("2d", { willReadFrequently:true });
-  const img = ctx.getImageData(0, 0, c.width, c.height), d = img.data;
-  let sum = 0;
-  for (let i=0; i<d.length; i+=4){ const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2]; d[i]=d[i+1]=d[i+2]=g; sum += g; }
-  if (sum / (d.length/4) < 110) for (let i=0; i<d.length; i+=4){ d[i]=d[i+1]=d[i+2]=255-d[i]; }
+  const W = c.width, H = c.height, img = ctx.getImageData(0, 0, W, H), d = img.data;
+  let sum = 0, colored = 0;
+  const g = new Float32Array(W * H);
+  for (let i=0, p=0; i<d.length; i+=4, p++){
+    const r = d[i], gg = d[i+1], b = d[i+2];
+    if (Math.max(r, gg, b) - Math.min(r, gg, b) > 60) colored++;
+    g[p] = 0.299*r + 0.587*gg + 0.114*b; sum += g[p];
+  }
+  if (colored / (W * H) > 0.25){
+    // 彩色底（例如藍底白字的表格）：依「和周圍底色的差距」二值化，深字淺字都變成白底黑字
+    const R = 40, D = 40, I = new Float64Array((W + 1) * (H + 1));
+    for (let y=0; y<H; y++){ let row = 0; for (let x=0; x<W; x++){ row += g[y*W + x]; I[(y+1)*(W+1) + x+1] = I[y*(W+1) + x+1] + row; } }
+    for (let y=0; y<H; y++){
+      const y0 = Math.max(0, y - R), y1 = Math.min(H, y + R + 1);
+      for (let x=0; x<W; x++){
+        const x0 = Math.max(0, x - R), x1 = Math.min(W, x + R + 1);
+        const m = (I[y1*(W+1) + x1] - I[y0*(W+1) + x1] - I[y1*(W+1) + x0] + I[y0*(W+1) + x0]) / ((y1 - y0) * (x1 - x0));
+        const v = Math.abs(g[y*W + x] - m) > D ? 0 : 255, i = (y*W + x) * 4;
+        d[i] = d[i+1] = d[i+2] = v;
+      }
+    }
+  } else {
+    const inv = sum / (W * H) < 110;
+    for (let i=0, p=0; i<d.length; i+=4, p++){ const v = inv ? 255 - g[p] : g[p]; d[i] = d[i+1] = d[i+2] = v; }
+  }
   ctx.putImageData(img, 0, 0);
   return c;
 }
@@ -2115,6 +2136,47 @@ function cardDate(y, m, d){
   if (s > t) s = `${yy-1}-${pad(m)}-${pad(d)}`;
   return s;
 }
+// 「欄位名稱＋內容」的表格式明細（例如遠東商銀：消費日／消費明細／消費金額…一筆一個區塊）
+function parseLabeled(text){
+  const lines = text.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const fullDate = t => { const m = t.match(/(20\d{2})\s*[\/.\-年]\s*(\d{1,2})\s*[\/.\-月]\s*(\d{1,2})/); return m ? cardDate(+m[1], +m[2], +m[3]) : null; };
+  const nDates = lines.filter(l => fullDate(l)).length, nAmt = lines.filter(l => /NT|金額/.test(l.replace(/\s/g, ""))).length;
+  if (nDates < 2 || nAmt < 1 || !lines.some(l => /消費|交易|入帳|明細|金額/.test(l))) return null;
+  // 每筆是固定順序的區塊：消費日 → 入帳日 → 明細 → 卡號 → 金額；欄位名稱讀錯也能靠順序判斷
+  const out = []; let cur = null, idx = 0;
+  for (const l of lines){
+    const t = l.replace(/\s/g, "");
+    if (/總|合計|應繳|注意|分期/.test(t)){ cur = null; continue; }
+    const date = fullDate(l), isAmt = !date && /NT|金額/.test(t) && /\d/.test(t);
+    if (!date && cur && cur.stage === 1 && (/入帳/.test(t) || /20\d\d\D/.test(t))){ cur.stage = 1.5; continue; }   // 讀不清楚的入帳日
+    if (date){
+      if (!cur || cur.stage >= 2) cur = { date, merchant:"", stage:1 };   // 消費日
+      else cur.stage = 1.5;                                              // 入帳日
+      continue;
+    }
+    if (!cur) continue;
+    if (isAmt){
+      const raw = t.replace(/^.*?(NTD|NT\$|NT|金額)/i, "").replace(/(?<=\d)[Oo]/g, "0").replace(/[lI|](?=[\d,])/g, "1");
+      const m = raw.match(/(-?)(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/);
+      if (m){
+        const amt = +m[2].replace(/,/g, "");
+        let merchant = cur.merchant.replace(/^.*(明細|摘要)/, "").replace(/[（(][^)）]*[)）]?\s*$/, "").replace(/(?<=\p{Script=Han})\s+|\s+(?=\p{Script=Han})/gu, "");
+        merchant = cleanMerchant(merchant);
+        if (amt > 0) out.push({ y: idx++, date: cur.date, merchant: merchant || "（未辨識商家）", amount: amt, refund: !!m[1] });
+      }
+      cur = null; continue;
+    }
+    if (/卡號|末四/.test(t) || /^\D{0,6}\d{4}$/.test(t)){ cur.stage = 3; continue; }
+    if (cur.stage >= 1 && cur.stage < 3 && /\p{L}/u.test(t)){
+      if (cur.stage < 2){
+        const parts = l.split(" ");
+        cur.merchant = (/明細|細|說明|摘要/.test(parts[0]) || (parts.length > 1 && parts[0].length <= 5)) ? parts.slice(1).join(" ") : l;
+        cur.stage = 2;
+      } else if (cur.merchant.length < 40) cur.merchant += (/[A-Za-z0-9]$/.test(cur.merchant) && /^[A-Za-z0-9]/.test(l) ? " " : "") + l;
+    }
+  }
+  return out;
+}
 const V_SKIP = /繳款|應繳|本期|上期|帳單|額度|可用|回饋|點數|合計|總計|最低|循環|利息|年費|自動扣|已入帳金額|消費明細|交易明細|信用卡$|卡號|搜尋|篩選/;
 function parseCardText(text, frame){
   const seq = []; let pending = "";
@@ -2172,7 +2234,7 @@ function cleanMerchant(t){
   if (pre.test(t)) t = t.replace(pre, "").replace(/^[水六未冰地池檔>]\s*(?=\p{Script=Han}{2})/u, "");
   t = t.replace(/^[水六未冰>]\s*(?=(麥味登|萊爾富|美德耐|統一|全家|麥當勞|必勝客|萊|美|麥))/u, "");
   return t.replace(/^[^\p{L}\p{N}]+/u, "").replace(/^((連加|街口|全支付|LINE ?PAY|悠遊付)\s*[*＊:：]?\s*)+/i, m => /LINE/i.test(m) ? "LINEPAY " : "")
-    .replace(/[*＊]/g, " ").replace(/[.。…,、，:;"'”“‘’|~\-—_]+$/g, "").replace(/\s+/g, " ").trim();
+    .replace(/[*＊]/g, " ").replace(/(?<=\p{Script=Han})\s*[~～]\s*(?=\p{Script=Han})/gu, "－").replace(/[.。…,、，:;"'”“‘’|~\-—_]+$/g, "").replace(/\s+/g, " ").trim();
 }
 async function columnOcr(ocr, c){
   const W = c.width, H = c.height;
@@ -2292,21 +2354,25 @@ function mergeRows(found){
 }
 let vGroups = [], vPhys = [];
 // 影片：相鄰畫面會有重疊的列，用「金額序列」對齊把新畫面接到清單後面；同一列在多個畫面的日期、金額取多數決
-function rowMatch(P, r){ return !!P.amounts[r.amount] || (!!P.dates[r.date] && normName(P.merchant).length > 1 && similar(P.merchant, r.merchant) && normName(P.merchant).slice(0,3) === normName(r.merchant).slice(0,3)); }
+const dayGap = (a, b) => Math.abs((new Date(a) - new Date(b)) / 864e5);
+const amtMatch = (P, r) => !!P.amounts[r.amount] && Object.keys(P.dates).some(d => dayGap(d, r.date) <= 3);
+function rowMatch(P, r){ return (!!P.amounts[r.amount] && Object.keys(P.dates).some(d => dayGap(d, r.date) <= 3)) || (!!P.dates[r.date] && normName(P.merchant).length > 1 && similar(P.merchant, r.merchant) && normName(P.merchant).slice(0,3) === normName(r.merchant).slice(0,3)); }
 function mergePositional(found){
   if (!found.length) return;
   const R = found.slice().sort((a, b) => a.y - b.y), G = vPhys;
   let bestT = G.length, bestScore = 0, bestL = 0;
   for (let t=Math.max(0, G.length - 16); t<G.length; t++){
     const L = Math.min(R.length, G.length - t); let sc = 0;
-    for (let i=0; i<L; i++) if (rowMatch(G[t+i], R[i])) sc++;
-    if (sc >= Math.max(1, Math.ceil(L * 0.5)) && (sc > bestScore || (sc === bestScore && L > bestL))){ bestT = t; bestScore = sc; bestL = L; }
+    let hits = 0;
+    for (let i=0; i<L; i++){ if (amtMatch(G[t+i], R[i])){ sc += 2; hits++; } else if (rowMatch(G[t+i], R[i])){ sc += 1; hits++; } }
+    if (hits >= Math.max(1, Math.ceil(L * 0.5)) && (sc > bestScore || (sc === bestScore && L > bestL))){ bestT = t; bestScore = sc; bestL = L; }
   }
   // 逐列對齊，允許某個畫面漏讀一列或讀錯金額
   let g = bestT;
   R.forEach((r, i) => {
     let P = null;
-    for (let k=g; k<Math.min(G.length, g + 3); k++) if (rowMatch(G[k], r)){ P = G[k]; g = k + 1; break; }
+    for (let k=g; k<Math.min(G.length, g + 3); k++) if (amtMatch(G[k], r)){ P = G[k]; g = k + 1; break; }
+    if (!P) for (let k=g; k<Math.min(G.length, g + 2); k++) if (rowMatch(G[k], r)){ P = G[k]; g = k + 1; break; }
     if (!P && g < G.length){
       const nx = R[i + 1];
       if (nx && rowMatch(G[g], nx)){ P = { amounts:{}, dates:{}, names:{}, merchant:r.merchant, refund:r.refund, n:0 }; G.splice(g, 0, P); g++; }   // 這一列是先前畫面漏掉的
@@ -2419,7 +2485,12 @@ $("vFile").onchange = async () => {
       if (window.__vlog) window.__vlog.push({ frames, ok:r.ok, months:r.months, rows:(r.rows||[]).map(x => [Math.round(x.y), x.day, x.amount, x.merchant].join(" ")) });
       if (r.ok && offset) mergePositional(assignDates(r.rows, r.months));
       else if (r.ok) mergeRows(assignDates(r.rows, r.months));
-      else mergeRows(parseCardText(r.text, frames));
+      else {
+        const lab = parseLabeled(r.text);
+        if (window.__vlog) window.__vlog.push({ frames, lab:(lab||[]).map(x => [x.date, x.amount, x.merchant].join(" ")) });
+        if (lab && lab.length){ if (offset) mergePositional(lab); else mergeRows(lab); }
+        else mergeRows(parseCardText(r.text, frames));
+      }
       vMsg(`辨識中… 已讀 ${frames} 個畫面，找到 ${vRows.length} 筆`);
     };
     for (let f=0; f<files.length && !vStopFlag; f++){
