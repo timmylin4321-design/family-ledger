@@ -200,6 +200,9 @@ tfoot td{font-weight:700;background:var(--bg)}
 .acctnote{background:none;border:0;padding:0;color:var(--muted);font-size:.85rem;text-align:left;cursor:text;max-width:12em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .acctnote.empty{opacity:.5}
 .fxsalary{border-top:1px solid var(--line)}
+.fxcalc{border-bottom:1px solid var(--line)}
+.fxcalc .k{font-size:.8rem;color:var(--muted)}
+.fxcalc .d{font-size:.72rem;color:var(--muted)}
 .acctname{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:500}
 
 .fx{display:grid;grid-template-columns:4.2em 1fr auto auto;gap:10px;align-items:center;padding:10px 16px;border-top:1px solid var(--line)}
@@ -522,6 +525,7 @@ tfoot td{font-weight:700;background:var(--bg)}
     <section>
       <h2>本月固定收支 <span class="edithint">點金額可直接修改</span></h2>
       <div class="panel">
+        <div class="kpis kpis4 fxcalc" id="fxCalc"></div>
         <div class="fxhead">
           <span id="fxSummary" style="font-size:.9rem"></span>
           <button class="primary small" type="button" id="fxPostAll">未記入的全部記入</button>
@@ -1095,6 +1099,39 @@ function postFixed(f){
 }
 // 固定支出改了金額或日期時，對應的薪資轉入跟著改
 function syncLinked(x){ for (const t of S.entries) if (t.linkId===x.id && t.salaryIn){ t.amount = Math.abs(x.amount); t.date = x.date; if (x.account !== t.account) t.toAccount = x.account; t.updatedAt = Date.now(); } }
+// 薪資＋油資－固定支出＝餘額
+const isFuelPay = x => /油資/.test((x.note||"") + (x.category||""));
+function monthIncome(key, test){ return S.entries.filter(x => x.type==="in" && x.date.startsWith(key) && test(x)).reduce((s,x)=>s+x.amount,0); }
+function lastIncome(test){
+  const key = ymKey(), cur = monthIncome(key, test);
+  if (cur) return { amt:cur, note:"本月" };
+  const prev = S.entries.filter(x => x.type==="in" && x.date < key && test(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if (!prev) return { amt:0, note:"尚無紀錄" };
+  const k = prev.date.slice(0,7);
+  return { amt: monthIncome(k, test), note:`本月未記，參考 ${+k.slice(5)} 月`, ref:true };
+}
+// 直接改本月的薪資／油資：改的是這個月那一筆收入（沒有就新增到薪資帳戶）
+function setMonthIncome(kind, v){
+  const key = ymKey(), test = kind==="fuel" ? isFuelPay : x => x.category==="薪資" && !isFuelPay(x);
+  const list = S.entries.filter(x => x.type==="in" && x.date.startsWith(key) && test(x));
+  const others = list.slice(1).reduce((s,x)=>s+x.amount,0);
+  if (list.length){ list[0].amount = Math.max(0, v - others); list[0].updatedAt = Date.now(); if (!list[0].amount) S.entries = S.entries.filter(x => x !== list[0]); return; }
+  if (!(v > 0)) return;
+  const account = salaryAcc() || S.accounts[0].id, dim = new Date(ym.y, ym.m, 0).getDate();
+  S.entries.push({ id:uid(), type:"in", category: kind==="fuel" ? "其他" : "薪資", amount:v, account, date:`${key}-${pad(Math.min(5, dim))}`, note: kind==="fuel" ? "油資補助" : "薪水", createdAt:Date.now() });
+}
+function renderFxCalc(outSum){
+  const box = $("fxCalc"); box.textContent = "";
+  const sal = lastIncome(x => x.category==="薪資" && !isFuelPay(x)), fuel = lastIncome(isFuelPay);
+  const fuelAmt = fuel.ref ? 0 : fuel.amt;   // 油資不是每月都有：本月沒記就算 0
+  const left = sal.amt + fuelAmt - outSum;
+  const tile = (k, valEl, d) => el("div",{}, el("div",{className:"k",textContent:k}), el("div",{className:"v"}, valEl), el("div",{className:"d",textContent:d}));
+  box.append(
+    tile("薪資", editableAmount(fmt(sal.amt), "in-c", sal.amt, v => setMonthIncome("salary", v), {allowZero:true}), sal.ref ? sal.note : "本月・點金額可修改"),
+    tile("＋ 油資", editableAmount(fmt(fuelAmt), "in-c", fuelAmt, v => setMonthIncome("fuel", v), {allowZero:true}), fuel.ref ? `本月未記（上次 ${fmt(fuel.amt)}）` : fuel.amt ? "本月・點金額可修改" : "本月未記・點金額可輸入"),
+    tile("－ 固定支出", el("span",{className:"out-c",textContent:fmt(outSum)}), "每月固定支出合計"),
+    tile("＝ 餘額", el("span",{className: left < 0 ? "out-c" : "in-c", style:"font-weight:700", textContent:fmt(left)}), sal.ref ? "薪資以上月估算" : "薪資＋油資－固定支出"));
+}
 // 這個月已記入、但還沒有薪資轉入的固定支出
 function missingSalary(){
   const from = salaryAcc(), key = ymKey();
@@ -1124,7 +1161,8 @@ function renderFixed(){
       el("div",{className:"rowbtns"}, eb, db)));
   }
   if (!items.length) list.append(el("div",{className:"empty-state"}, el("strong",{textContent:"還沒有固定項目"}), "在下方加入房租、保險、電信費、薪水這類每月固定的收支，之後每個月按一下就能記入。"));
-  $("fxSummary").textContent = items.length ? `每月固定支出 NT$${fmt(outSum)}${inSum?` · 固定收入 NT$${fmt(inSum)}`:""} · 本月已記 ${done}/${items.length}` : "";
+  $("fxSummary").textContent = items.length ? `本月已記 ${done}/${items.length}${inSum?` · 固定收入 NT$${fmt(inSum)}`:""}` : "";
+  renderFxCalc(outSum);
   $("fxPostAll").hidden = !items.length || done===items.length;
   const sel = $("fxSalary"), cur = salaryAcc(); sel.textContent = "";
   sel.append(new Option("不轉入（各帳戶自己扣款）", ""));
