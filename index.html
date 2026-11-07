@@ -583,7 +583,7 @@ tfoot td{font-weight:700;background:var(--bg)}
 (() => {
 const CATS = {
   out: ["餐飲","交通","日用品","居家","房租房貸","水電瓦斯","電信網路","醫療","教育","娛樂","寵物","保險","孝親","貸款","信用卡費","生活基金","家庭零用","投資理財","其他"],
-  in:  ["薪資","獎金","投資","利息","退款","其他"]
+  in:  ["薪資","油資","獎金","投資","利息","退款","其他"]
 };
 const KEY = "family-ledger-v1";
 const $ = id => document.getElementById(id);
@@ -726,6 +726,12 @@ function fixFuelEntries(){
     if (a/b < 3 || a/b > 40) continue;   // 不像油耗的就不動
     x.category = "交通"; x.note = "加油"; x.km = a; x.liters = b; x.updatedAt = Date.now(); n++;
   }
+  return n > 0;
+}
+// 舊的「其他・油資補助」收入改歸到新的「油資」分類
+function fixFuelPayCat(){
+  let n = 0;
+  for (const x of S.entries) if (x.type==="in" && x.category==="其他" && /油資/.test(x.note||"")){ x.category = "油資"; x.updatedAt = Date.now(); n++; }
   return n > 0;
 }
 function addSubcat(c, name){
@@ -1118,7 +1124,7 @@ function setMonthIncome(kind, v){
   if (list.length){ list[0].amount = Math.max(0, v - others); list[0].updatedAt = Date.now(); if (!list[0].amount) S.entries = S.entries.filter(x => x !== list[0]); return; }
   if (!(v > 0)) return;
   const account = salaryAcc() || S.accounts[0].id, dim = new Date(ym.y, ym.m, 0).getDate();
-  S.entries.push({ id:uid(), type:"in", category: kind==="fuel" ? "其他" : "薪資", amount:v, account, date:`${key}-${pad(Math.min(5, dim))}`, note: kind==="fuel" ? "油資補助" : "薪水", createdAt:Date.now() });
+  S.entries.push({ id:uid(), type:"in", category: kind==="fuel" ? "油資" : "薪資", amount:v, account, date:`${key}-${pad(Math.min(5, dim))}`, note: kind==="fuel" ? "油資補助" : "薪水", createdAt:Date.now() });
 }
 function renderFxCalc(outSum){
   const box = $("fxCalc"); box.textContent = "";
@@ -1690,7 +1696,7 @@ function subscribe(id){
     cloud.ready = true;
     if (first && cloud.uploadLocal){ S.entries = cloud.uploadLocal; cloud.uploadLocal = null; cloudPush(); cloudInfo(`已把這台裝置的 ${S.entries.length} 筆紀錄上傳到雲端。`); }
     for (const e of S.entries) if (!acc(e.account)) e.account = S.accounts[0].id;
-    if (ensureSubcats() | fixSnackSubs() | fixFuelEntries()) cloudPush();
+    if (ensureSubcats() | fixSnackSubs() | fixFuelEntries() | fixFuelPayCat()) cloudPush();
     saveLocal(); renderAll(); renderChips(); renderCloud();
   };
   cloud.unsubs.push(ref.onSnapshot(snap => {
@@ -1922,7 +1928,7 @@ const OUT_KW = [
   [/卡費/, "信用卡費"],
   [/定期定額|買股|基金/, "投資理財"]
 ];
-const IN_KW = [[/薪水|薪資/, "薪資"], [/獎金|年終/, "獎金"], [/利息/, "利息"], [/退款|退費/, "退款"], [/股利|配息/, "投資"]];
+const IN_KW = [[/油資/, "油資"], [/薪水|薪資/, "薪資"], [/獎金|年終/, "獎金"], [/利息/, "利息"], [/退款|退費/, "退款"], [/股利|配息/, "投資"]];
 const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 function parseQuick(text){
@@ -2024,7 +2030,7 @@ function parseQuick(text){
       }
     }
   }
-  if (!account) account = accFor(category) || $("fAcc").value || S.accounts[0].id;
+  if (!account) account = accFor(category) || ((category === "薪資" || category === "油資") && salaryAcc()) || $("fAcc").value || S.accounts[0].id;
   // 沒寫子類別時，依過去同分類、同備註的紀錄自動帶入最常用的子類別
   let subAuto = false;
   if (!sub && subList(category).length){
@@ -2621,7 +2627,7 @@ $("vFile").onchange = async () => {
 };
 
 /* ---------- boot ---------- */
-if (ensureSubcats() | fixSnackSubs() | fixFuelEntries()) saveLocal();
+if (ensureSubcats() | fixSnackSubs() | fixFuelEntries() | fixFuelPayCat()) saveLocal();
 setType("out"); setFxType("out"); renderAll(); showTab(location.hash.slice(1));
 if (document.readyState === "complete") initCloud(); else addEventListener("load", initCloud);
 })();
