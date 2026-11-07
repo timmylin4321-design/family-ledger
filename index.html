@@ -1099,7 +1099,7 @@ function renderAccounts(){
   $("acctFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n",textContent:fmt(sum.bal)}), el("td",{className:"n in-c",textContent:fmt(sum.mIn)}), el("td",{className:"n",textContent: sum.sIn ? fmt(sum.sIn) : "—"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
   $("cardSection").hidden = !nCard;
   $("cardFoot").textContent="";
-  if (nCard) $("cardFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n out-c",textContent:fmt(csum.fee)}), el("td",{className:"n in-c",textContent:fmt(csum.mIn)}), el("td",{className:"n",textContent: csum.sIn ? fmt(csum.sIn) : "—"}), el("td",{className:"n out-c",textContent:fmt(csum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
+  if (nCard) $("cardFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n out-c",textContent:fmt(csum.fee)}), el("td",{className:"n in-c",textContent:fmt(csum.mIn)}), el("td",{className:"n",textContent: csum.sIn ? fmt(csum.sIn) : "—"}), el("td",{className:"n out-c"}, fmt(csum.mOut), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(csum.fee)}＋固定 ${fmt(csum.sIn)}`})), el("td",{}), el("td",{}), el("td",{})));
   $("totalAssets").textContent = "NT$ " + fmt(sum.bal);
   $("totalAssets").className = "v" + (sum.bal<0?" out-c":"");
   $("totalNote").textContent = `${nBank} 個帳戶${nCard ? `（不含 ${nCard} 張信用卡，本月卡費 NT$${fmt(csum.fee)}）` : ""} · 截至 ${ym.y}/${pad(ym.m)} 月底`;
