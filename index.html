@@ -419,7 +419,7 @@ tfoot td{font-weight:700;background:var(--bg)}
     </section>
 
     <section id="cardSection" hidden>
-      <h2><span style="white-space:nowrap">信用卡</span> <span class="edithint">卡費＝未繳＋固定支出，不列入本月支出</span></h2>
+      <h2><span style="white-space:nowrap">信用卡</span> <span class="edithint">本月支出＝未繳＋固定，不列入上方本月支出</span></h2>
       <div class="panel tablebox">
         <table>
           <thead><tr><th>帳戶</th><th class="n">本月卡費</th><th class="n">本月收入</th><th class="n">薪資轉入</th><th class="n">本月支出</th><th class="n">轉入／轉出</th><th>備註</th><th></th></tr></thead>
@@ -1073,12 +1073,12 @@ function renderAccounts(){
     if (a.card){
       // 信用卡：本月卡費＝月底未繳（餘額的負數）＋本月固定支出（薪資轉入）
       const unpaid = Math.max(0, -s.bal), fee = unpaid + s.sIn; nCard++;
-      csum.fee+=fee; csum.mIn+=s.mIn; csum.mOut+=s.mOut; csum.sIn+=s.sIn;
+      csum.fee+=unpaid; csum.mIn+=s.mIn; csum.mOut+=fee; csum.sIn+=s.sIn;
       cbody.append(el("tr",{},
         el("td",{},nameBtn),
-        el("td",{className:"n out-c",style:"font-weight:700",title:`月底未繳 ${fmt(unpaid)}＋固定支出 ${fmt(s.sIn)}`}, fmt(fee), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(unpaid)}＋固定 ${fmt(s.sIn)}`})),
+        el("td",{className:"n out-c",style:"font-weight:700",title:"月底未繳的卡費"}, fmt(unpaid)),
         inCell, salCell,
-        el("td",{className:"n",style:"color:var(--muted)",title:"信用卡刷卡，不列入本月支出"}, fmt(s.mOut)),
+        el("td",{className:"n out-c",title:`月底未繳 ${fmt(unpaid)}＋固定支出 ${fmt(s.sIn)}（不列入上方本月支出）`}, fmt(fee), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(unpaid)}＋固定 ${fmt(s.sIn)}`})),
         el("td",{className:"n",textContent:tr}),
         el("td",{}, acctNote(a)),
         el("td",{}, el("div",{className:"rowbtns"}, eb, db))));
@@ -1099,7 +1099,7 @@ function renderAccounts(){
   $("acctFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n",textContent:fmt(sum.bal)}), el("td",{className:"n in-c",textContent:fmt(sum.mIn)}), el("td",{className:"n",textContent: sum.sIn ? fmt(sum.sIn) : "—"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
   $("cardSection").hidden = !nCard;
   $("cardFoot").textContent="";
-  if (nCard) $("cardFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n out-c",textContent:fmt(csum.fee)}), el("td",{className:"n in-c",textContent:fmt(csum.mIn)}), el("td",{className:"n",textContent: csum.sIn ? fmt(csum.sIn) : "—"}), el("td",{className:"n",style:"color:var(--muted)",textContent:fmt(csum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
+  if (nCard) $("cardFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n out-c",textContent:fmt(csum.fee)}), el("td",{className:"n in-c",textContent:fmt(csum.mIn)}), el("td",{className:"n",textContent: csum.sIn ? fmt(csum.sIn) : "—"}), el("td",{className:"n out-c",textContent:fmt(csum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
   $("totalAssets").textContent = "NT$ " + fmt(sum.bal);
   $("totalAssets").className = "v" + (sum.bal<0?" out-c":"");
   $("totalNote").textContent = `${nBank} 個帳戶${nCard ? `（不含 ${nCard} 張信用卡，本月卡費 NT$${fmt(csum.fee)}）` : ""} · 截至 ${ym.y}/${pad(ym.m)} 月底`;
