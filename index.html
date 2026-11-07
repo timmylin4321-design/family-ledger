@@ -433,6 +433,7 @@ tfoot td{font-weight:700;background:var(--bg)}
         <div class="fields">
           <label class="field"><span>帳戶名稱</span><input type="text" id="acName" maxlength="20" placeholder="例：台新薪轉、國泰數存、現金"></label>
           <label class="field"><span>期初餘額（開始記帳時的餘額）</span><input type="number" id="acInit" inputmode="decimal" step="1" placeholder="0"></label>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="acCard" style="width:auto"> 信用卡帳戶（刷卡不列入本月支出，繳卡費時才算）</label>
         </div>
         <div class="actions">
           <span class="formmsg" id="acMsg"></span>
@@ -728,6 +729,15 @@ function fixFuelEntries(){
   }
   return n > 0;
 }
+// 信用卡帳戶：刷卡的支出不列入本月支出（繳卡費時才算），避免重複計算
+const isCard = id => !!(acc(id) && acc(id).card);
+const countsOut = x => x.type==="out" && !isCard(x.account);
+function markCards(){
+  if (S.accounts.some(a => "card" in a)) return false;
+  let n = 0;
+  S.accounts = S.accounts.map(a => /richart|遠東/i.test(a.name) ? (n++, { ...a, card:true }) : a);
+  return n > 0;
+}
 // 舊的「其他・油資補助」收入改歸到新的「油資」分類
 function fixFuelPayCat(){
   let n = 0;
@@ -931,7 +941,7 @@ function renderLedger(){
   let tin=0, tout=0; const byCat={}, bySub={};
   for (const x of month){
     if (x.type==="in") tin+=x.amount;
-    else if (x.type==="out"){ tout+=x.amount; byCat[x.category]=(byCat[x.category]||0)+x.amount; const sk=x.sub||"未指定"; (bySub[x.category] ||= {})[sk]=(bySub[x.category][sk]||0)+x.amount; }
+    else if (countsOut(x)){ tout+=x.amount; byCat[x.category]=(byCat[x.category]||0)+x.amount; const sk=x.sub||"未指定"; (bySub[x.category] ||= {})[sk]=(bySub[x.category][sk]||0)+x.amount; }
   }
   $("sIn").textContent=fmt(tin); $("sOut").textContent=fmt(tout);
   const net=tin-tout; $("sNet").textContent=fmt(net); $("sNet").className="v "+(net<0?"out-c":net>0?"in-c":"");
@@ -975,7 +985,7 @@ function renderLedger(){
   const days={}; for (const x of list) (days[x.date] ||= []).push(x);
   for (const [d,items] of Object.entries(days)){
     const dt=new Date(d+"T00:00:00");
-    const dOut=items.filter(x=>x.type==="out").reduce((s,x)=>s+x.amount,0);
+    const dOut=items.filter(countsOut).reduce((s,x)=>s+x.amount,0);
     const sec=el("div",{className:"day"},
       el("div",{className:"dayhead"}, el("span",{textContent:`${+d.slice(5,7)}/${+d.slice(8)} (${WD[dt.getDay()]})`}), el("span",{className:"num",textContent:dOut?"支出 "+fmt(dOut):""})));
     for (const x of items){
@@ -984,7 +994,7 @@ function renderLedger(){
       let sign = x.type==="in"?(neg?"−":"+"):x.type==="out"?(neg?"+":"−"):x.type==="adjust"?((x.sign||1)>0?"+":"−"):"⇄ ";
       let amtCls = cls;
       if (x.type==="transfer" && filterAcc){ const incoming = x.toAccount===filterAcc; sign = incoming?"+":"−"; amtCls = incoming?"in":"out"; }
-      const sub = x.type==="transfer" ? `${accName(x.account)} → ${accName(x.toAccount)}` : accName(x.account) + (x.fixedId?" · 固定":"") + (fuelEff(x) ? " · " + fuelText(x) : "");
+      const sub = x.type==="transfer" ? `${accName(x.account)} → ${accName(x.toAccount)}` : accName(x.account) + (x.type==="out" && isCard(x.account) ? " · 刷卡（不計入支出）" : "") + (x.fixedId?" · 固定":"") + (fuelEff(x) ? " · " + fuelText(x) : "");
       const note = el("span",{className:"note"}, el("span",{textContent:x.note || (x.type==="transfer"?"轉帳":"—")}), el("small",{textContent:sub}));
       const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick=()=>startEdit(x);
       if (x.type==="adjust") eb.hidden = true;
@@ -1022,11 +1032,12 @@ function renderAccounts(){
   const body=$("acctBody"); body.textContent="";
   let sum={bal:0,mIn:0,mOut:0,sIn:0};
   for (const a of S.accounts){
-    const s=accountStats(a.id); sum.bal+=s.bal; sum.mIn+=s.mIn; sum.mOut+=s.mOut; sum.sIn+=s.sIn;
+    const s=accountStats(a.id); sum.bal+=s.bal; sum.mIn+=s.mIn; if (!a.card) sum.mOut+=s.mOut; sum.sIn+=s.sIn;
     const nameBtn = el("button",{type:"button",className:"acctname",textContent:a.name,title:"查看此帳戶明細"});
+    if (a.card) nameBtn.append(el("span",{className:"tag tr",style:"margin-left:6px;font-size:.7rem;text-decoration:none;display:inline-block",textContent:"信用卡"}));
     nameBtn.onclick = () => { filterAcc=a.id; $("filterAcc").value=a.id; history.replaceState(null,"","#ledger"); showTab("ledger"); renderLedger(); };
     const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick = () => {
-      acEdit=a.id; $("acName").value=a.name; $("acInit").value=a.init||0;
+      acEdit=a.id; $("acName").value=a.name; $("acInit").value=a.init||0; $("acCard").checked=!!a.card;
       $("acFormTitle").textContent="編輯帳戶"; $("acSubmit").textContent="儲存"; $("acCancel").hidden=false; $("acName").focus();
     };
     const used = S.entries.filter(x=>x.account===a.id||x.toAccount===a.id).length + S.fixed.filter(f=>f.account===a.id).length;
@@ -1041,7 +1052,9 @@ function renderAccounts(){
       el("td",{className:"n"+(s.bal<0?" out-c":""),style:"font-weight:700"}, editableAmount(fmt(s.bal), "", Math.round(s.bal*100)/100, v => setMonthEndBalance(a.id, v), {allowNegative:true, allowZero:true})),
       el("td",{className:"n in-c"}, editableAmount(fmt(s.mIn), "", Math.round(s.mIn*100)/100, v => setMonthTotal(a.id, "in", v), {allowZero:true})),
       el("td",{className:"n", style: s.sOut ? "color:var(--muted)" : "", title: s.sOut ? "從這個薪資帳戶轉出去付固定支出" : "", textContent: s.sIn ? "+"+fmt(s.sIn) : s.sOut ? "−"+fmt(s.sOut) : "—"}),
-      el("td",{className:"n out-c"}, editableAmount(fmt(s.mOut), "", Math.round(s.mOut*100)/100, v => setMonthTotal(a.id, "out", v), {allowZero:true})),
+      a.card
+        ? el("td",{className:"n",style:"color:var(--muted)",title:"信用卡刷卡不列入本月支出，繳卡費時才算"}, el("small",{textContent:"刷卡 "}), fmt(s.mOut))
+        : el("td",{className:"n out-c"}, editableAmount(fmt(s.mOut), "", Math.round(s.mOut*100)/100, v => setMonthTotal(a.id, "out", v), {allowZero:true})),
       el("td",{className:"n",textContent:tr}),
       el("td",{}, acctNote(a)),
       el("td",{}, el("div",{className:"rowbtns"}, eb, db))));
@@ -1068,15 +1081,16 @@ function acctNote(a){
   };
   return b;
 }
-function resetAcForm(){ acEdit=null; $("acName").value=""; $("acInit").value=""; $("acFormTitle").textContent="新增帳戶"; $("acSubmit").textContent="新增帳戶"; $("acCancel").hidden=true; }
+function resetAcForm(){ acEdit=null; $("acName").value=""; $("acInit").value=""; $("acCard").checked=false; $("acFormTitle").textContent="新增帳戶"; $("acSubmit").textContent="新增帳戶"; $("acCancel").hidden=true; }
 $("acCancel").onclick = resetAcForm;
 $("acForm").addEventListener("submit", e => {
   e.preventDefault();
   const name=$("acName").value.trim(), init=parseFloat($("acInit").value)||0;
   if (!name){ flash("請輸入帳戶名稱。", true, "acMsg"); return; }
   if (S.accounts.some(a=>a.name===name && a.id!==acEdit)){ flash("已經有同名的帳戶了。", true, "acMsg"); return; }
-  if (acEdit){ const a=acc(acEdit); a.name=name; a.init=init; flash("已更新帳戶", false, "acMsg"); }
-  else { S.accounts.push({id:uid(),name,init}); flash(`已新增「${name}」`, false, "acMsg"); }
+  const card = $("acCard").checked;
+  if (acEdit){ const a=acc(acEdit); a.name=name; a.init=init; a.card=card; flash("已更新帳戶", false, "acMsg"); }
+  else { S.accounts.push({id:uid(),name,init,card}); flash(`已新增「${name}」`, false, "acMsg"); }
   persist(); resetAcForm(); renderAll();
 });
 
@@ -1403,7 +1417,7 @@ function monthsBack(n){
 }
 function monthTotals(key){
   let tin=0, tout=0;
-  for (const x of S.entries) if (x.date.startsWith(key)){ if(x.type==="in") tin+=x.amount; else if(x.type==="out") tout+=x.amount; }
+  for (const x of S.entries) if (x.date.startsWith(key)){ if(x.type==="in") tin+=x.amount; else if(countsOut(x)) tout+=x.amount; }
   return {tin,tout};
 }
 function balanceAt(id, end){
@@ -1463,7 +1477,7 @@ function renderCharts(){
   $("kAvgK").textContent = `${kLab}平均支出`;
   $("kAvg").textContent = fmt(avg);
   $("kAvgD").textContent = active.length ? `以有紀錄的 ${active.length} 個月計` : "尚無資料";
-  const fixedOut = S.entries.filter(x=>x.fixedId && x.type==="out" && x.date.startsWith(key)).reduce((s,x)=>s+x.amount,0);
+  const fixedOut = S.entries.filter(x=>x.fixedId && countsOut(x) && x.date.startsWith(key)).reduce((s,x)=>s+x.amount,0);
   $("kFix").textContent = cur.tout ? Math.round(fixedOut/cur.tout*100)+"%" : "—";
   $("kFixD").textContent = `固定 NT$${fmt(fixedOut)}`;
 
@@ -1489,7 +1503,7 @@ function renderCharts(){
   const lastDay = isCurrent ? +today().slice(8) : dim;
   const daily = new Array(dim).fill(0), pDaily = new Array(31).fill(0);
   for (const x of S.entries){
-    if (x.type!=="out") continue;
+    if (!countsOut(x)) continue;
     if (x.date.startsWith(key)) daily[+x.date.slice(8)-1] += x.amount;
     else if (prevKey && x.date.startsWith(prevKey)) pDaily[+x.date.slice(8)-1] += x.amount;
   }
@@ -1511,7 +1525,7 @@ function renderCharts(){
 
   /* 3. 分類甜甜圈 */
   const byCat = {};
-  for (const x of S.entries) if (x.type==="out" && x.date.startsWith(key)) byCat[x.category]=(byCat[x.category]||0)+x.amount;
+  for (const x of S.entries) if (countsOut(x) && x.date.startsWith(key)) byCat[x.category]=(byCat[x.category]||0)+x.amount;
   const catRows = Object.entries(byCat).filter(r=>r[1]>0).sort((a,b)=>b[1]-a[1]);
   const catColor = c => PAL[(CATS.out.indexOf(c)+PAL.length)%PAL.length];
   upsert("cCat", { type:"doughnut",
@@ -1696,7 +1710,7 @@ function subscribe(id){
     cloud.ready = true;
     if (first && cloud.uploadLocal){ S.entries = cloud.uploadLocal; cloud.uploadLocal = null; cloudPush(); cloudInfo(`已把這台裝置的 ${S.entries.length} 筆紀錄上傳到雲端。`); }
     for (const e of S.entries) if (!acc(e.account)) e.account = S.accounts[0].id;
-    if (ensureSubcats() | fixSnackSubs() | fixFuelEntries() | fixFuelPayCat()) cloudPush();
+    if (ensureSubcats() | fixSnackSubs() | fixFuelEntries() | fixFuelPayCat() | markCards()) cloudPush();
     saveLocal(); renderAll(); renderChips(); renderCloud();
   };
   cloud.unsubs.push(ref.onSnapshot(snap => {
@@ -2627,7 +2641,7 @@ $("vFile").onchange = async () => {
 };
 
 /* ---------- boot ---------- */
-if (ensureSubcats() | fixSnackSubs() | fixFuelEntries() | fixFuelPayCat()) saveLocal();
+if (ensureSubcats() | fixSnackSubs() | fixFuelEntries() | fixFuelPayCat() | markCards()) saveLocal();
 setType("out"); setFxType("out"); renderAll(); showTab(location.hash.slice(1));
 if (document.readyState === "complete") initCloud(); else addEventListener("load", initCloud);
 })();
