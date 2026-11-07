@@ -429,6 +429,17 @@ tfoot td{font-weight:700;background:var(--bg)}
       </div>
     </section>
 
+    <section id="grandSection">
+      <h2>本月支出總合計 <span class="edithint">信用卡只算固定支出，本月卡費不計入</span></h2>
+      <div class="panel tablebox">
+        <table>
+          <thead><tr><th>項目</th><th class="n">金額</th></tr></thead>
+          <tbody id="grandBody"></tbody>
+          <tfoot id="grandFoot"></tfoot>
+        </table>
+      </div>
+    </section>
+
     <section id="shareSection" hidden>
       <h2>共用這本帳 <span class="edithint" id="shareHint"></span></h2>
       <div class="panel">
@@ -1100,6 +1111,11 @@ function renderAccounts(){
   $("cardSection").hidden = !nCard;
   $("cardFoot").textContent="";
   if (nCard) $("cardFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n out-c",textContent:fmt(csum.fee)}), el("td",{className:"n in-c",textContent:fmt(csum.mIn)}), el("td",{className:"n",textContent: csum.sIn ? fmt(csum.sIn) : "—"}), el("td",{className:"n out-c"}, fmt(csum.mOut), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(csum.fee)}＋固定 ${fmt(csum.sIn)}`})), el("td",{}), el("td",{}), el("td",{})));
+  // 總合計：銀行帳戶本月支出＋信用卡固定支出
+  const gb = $("grandBody"), gf = $("grandFoot"); gb.textContent = ""; gf.textContent = "";
+  gb.append(el("tr",{}, el("td",{textContent:"帳戶支出（銀行帳戶本月支出合計）"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)})));
+  if (nCard) gb.append(el("tr",{}, el("td",{textContent:"信用卡固定支出"}), el("td",{className:"n out-c",textContent:fmt(csum.sIn)})));
+  gf.append(el("tr",{}, el("td",{textContent:"總合計"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut + csum.sIn)})));
   $("totalAssets").textContent = "NT$ " + fmt(sum.bal);
   $("totalAssets").className = "v" + (sum.bal<0?" out-c":"");
   $("totalNote").textContent = `${nBank} 個帳戶${nCard ? `（不含 ${nCard} 張信用卡，本月卡費 NT$${fmt(csum.fee)}）` : ""} · 截至 ${ym.y}/${pad(ym.m)} 月底`;
