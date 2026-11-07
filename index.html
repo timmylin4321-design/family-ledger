@@ -1114,7 +1114,7 @@ function renderAccounts(){
   // 總合計：銀行帳戶本月支出＋信用卡固定支出
   const gb = $("grandBody"), gf = $("grandFoot"); gb.textContent = ""; gf.textContent = "";
   gb.append(el("tr",{}, el("td",{textContent:"帳戶支出（銀行帳戶本月支出合計）"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)})));
-  if (nCard) gb.append(el("tr",{}, el("td",{textContent:"信用卡固定支出"}), el("td",{className:"n out-c",textContent:fmt(csum.sIn)})));
+  if (nCard) gb.append(el("tr",{}, el("td",{textContent:"信用卡固定支出（不列入本月卡費）"}), el("td",{className:"n out-c",textContent:fmt(csum.sIn)})));
   gf.append(el("tr",{}, el("td",{textContent:"總合計"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut + csum.sIn)})));
   $("totalAssets").textContent = "NT$ " + fmt(sum.bal);
   $("totalAssets").className = "v" + (sum.bal<0?" out-c":"");
