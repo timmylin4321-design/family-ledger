@@ -197,6 +197,9 @@ th,td{padding:10px 14px;text-align:left;border-top:1px solid var(--line);white-s
 thead th{border-top:0;font-size:.75rem;color:var(--muted);font-weight:500;letter-spacing:.08em;background:var(--bg)}
 td.n,th.n{text-align:right;font-family:var(--f-num);font-variant-numeric:tabular-nums}
 tfoot td{font-weight:700;background:var(--bg)}
+.acctnote{background:none;border:0;padding:0;color:var(--muted);font-size:.85rem;text-align:left;cursor:text;max-width:12em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.acctnote.empty{opacity:.5}
+.fxsalary{border-top:1px solid var(--line)}
 .acctname{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:500}
 
 .fx{display:grid;grid-template-columns:4.2em 1fr auto auto;gap:10px;align-items:center;padding:10px 16px;border-top:1px solid var(--line)}
@@ -396,7 +399,7 @@ tfoot td{font-weight:700;background:var(--bg)}
       <h2>各帳戶 <span class="edithint">點月底餘額可直接修改，差額會記成餘額調整</span></h2>
       <div class="panel tablebox">
         <table>
-          <thead><tr><th>帳戶</th><th class="n">月底餘額</th><th class="n">本月收入</th><th class="n">本月支出</th><th class="n">轉入／轉出</th><th></th></tr></thead>
+          <thead><tr><th>帳戶</th><th class="n">月底餘額</th><th class="n">本月收入</th><th class="n">薪資轉入</th><th class="n">本月支出</th><th class="n">轉入／轉出</th><th>備註</th><th></th></tr></thead>
           <tbody id="acctBody"></tbody>
           <tfoot id="acctFoot"></tfoot>
         </table>
@@ -522,6 +525,11 @@ tfoot td{font-weight:700;background:var(--bg)}
         <div class="fxhead">
           <span id="fxSummary" style="font-size:.9rem"></span>
           <button class="primary small" type="button" id="fxPostAll">未記入的全部記入</button>
+        </div>
+        <div class="fxhead fxsalary">
+          <label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.9rem">固定支出由薪水支付，薪資帳戶：<select id="fxSalary" style="width:auto"></select></label>
+          <span class="quickprev" id="fxSalaryNote"></span>
+          <button type="button" class="linkbtn" id="fxBackfill" hidden></button>
         </div>
         <div id="fxList"></div>
       </div>
@@ -873,7 +881,7 @@ $("form").addEventListener("submit", e => {
   if (type!=="transfer" && sub) body.sub = sub;
   if (editId){
     const i = S.entries.findIndex(x=>x.id===editId);
-    if (i>=0){ const old=S.entries[i]; S.entries[i] = { id:old.id, createdAt:old.createdAt, fixedId:old.fixedId, ...(old.km ? {km:old.km} : {}), ...(old.liters ? {liters:old.liters} : {}), ...body, updatedAt:Date.now() }; }
+    if (i>=0){ const old=S.entries[i]; setTimeout(() => { const nx = S.entries.find(y => y.id===old.id); if (nx){ syncLinked(nx); persist(); renderAll(); } }, 0); S.entries[i] = { id:old.id, createdAt:old.createdAt, fixedId:old.fixedId, ...(old.km ? {km:old.km} : {}), ...(old.liters ? {liters:old.liters} : {}), ...body, updatedAt:Date.now() }; }
     flash("已更新");
   } else {
     S.entries.push({ id:uid(), ...body, createdAt:Date.now() });
@@ -970,12 +978,12 @@ function renderLedger(){
       const note = el("span",{className:"note"}, el("span",{textContent:x.note || (x.type==="transfer"?"轉帳":"—")}), el("small",{textContent:sub}));
       const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick=()=>startEdit(x);
       if (x.type==="adjust") eb.hidden = true;
-      const db = delBtn("e:"+x.id, () => { S.entries=S.entries.filter(y=>y.id!==x.id); if(editId===x.id) resetForm(); });
+      const db = delBtn("e:"+x.id, () => { S.entries=S.entries.filter(y=>y.id!==x.id && y.linkId!==x.id); if(editId===x.id) resetForm(); });
       sec.append(el("div",{className:"item"},
         el("span",{className:"tag "+cls,textContent:x.category + (x.sub ? "・"+x.sub : "")}), note,
         x.type==="adjust"
           ? editableAmount(sign+fmt(x.amount), "amt "+amtCls, (x.sign||1)*x.amount, v => { x.sign = v<0?-1:1; x.amount = Math.abs(v); x.updatedAt = Date.now(); }, {allowNegative:true})
-          : editableAmount(sign+fmt(Math.abs(x.amount)), "amt "+amtCls, x.amount, v => { x.amount = v; x.updatedAt = Date.now(); }, {allowNegative: !!x.manual}),
+          : editableAmount(sign+fmt(Math.abs(x.amount)), "amt "+amtCls, x.amount, v => { x.amount = v; x.updatedAt = Date.now(); syncLinked(x); }, {allowNegative: !!x.manual}),
         el("div",{className:"rowbtns"}, eb, db)));
     }
     reg.append(sec);
@@ -986,25 +994,25 @@ function renderLedger(){
 /* ---------- 帳戶總覽 tab ---------- */
 function accountStats(id){
   const key=ymKey(), end=monthEnd();
-  let bal = +acc(id)?.init || 0, mIn=0, mOut=0, tIn=0, tOut=0;
+  let bal = +acc(id)?.init || 0, mIn=0, mOut=0, tIn=0, tOut=0, sIn=0, sOut=0;
   for (const x of S.entries){
     if (x.date > end) continue;
     const inMonth = x.date.startsWith(key);
     if (x.type==="in" && x.account===id){ bal+=x.amount; if(inMonth) mIn+=x.amount; }
     else if (x.type==="out" && x.account===id){ bal-=x.amount; if(inMonth) mOut+=x.amount; }
     else if (x.type==="transfer"){
-      if (x.account===id){ bal-=x.amount; if(inMonth) tOut+=x.amount; }
-      if (x.toAccount===id){ bal+=x.amount; if(inMonth) tIn+=x.amount; }
+      if (x.account===id){ bal-=x.amount; if(inMonth){ if (x.salaryIn) sOut+=x.amount; else tOut+=x.amount; } }
+      if (x.toAccount===id){ bal+=x.amount; if(inMonth){ if (x.salaryIn) sIn+=x.amount; else tIn+=x.amount; } }
     }
     else if (x.type==="adjust" && x.account===id) bal += (x.sign||1)*x.amount;
   }
-  return {bal,mIn,mOut,tIn,tOut};
+  return {bal,mIn,mOut,tIn,tOut,sIn,sOut};
 }
 function renderAccounts(){
   const body=$("acctBody"); body.textContent="";
-  let sum={bal:0,mIn:0,mOut:0};
+  let sum={bal:0,mIn:0,mOut:0,sIn:0};
   for (const a of S.accounts){
-    const s=accountStats(a.id); sum.bal+=s.bal; sum.mIn+=s.mIn; sum.mOut+=s.mOut;
+    const s=accountStats(a.id); sum.bal+=s.bal; sum.mIn+=s.mIn; sum.mOut+=s.mOut; sum.sIn+=s.sIn;
     const nameBtn = el("button",{type:"button",className:"acctname",textContent:a.name,title:"查看此帳戶明細"});
     nameBtn.onclick = () => { filterAcc=a.id; $("filterAcc").value=a.id; history.replaceState(null,"","#ledger"); showTab("ledger"); renderLedger(); };
     const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick = () => {
@@ -1022,15 +1030,33 @@ function renderAccounts(){
       el("td",{},nameBtn),
       el("td",{className:"n"+(s.bal<0?" out-c":""),style:"font-weight:700"}, editableAmount(fmt(s.bal), "", Math.round(s.bal*100)/100, v => setMonthEndBalance(a.id, v), {allowNegative:true, allowZero:true})),
       el("td",{className:"n in-c"}, editableAmount(fmt(s.mIn), "", Math.round(s.mIn*100)/100, v => setMonthTotal(a.id, "in", v), {allowZero:true})),
+      el("td",{className:"n", style: s.sOut ? "color:var(--muted)" : "", title: s.sOut ? "從這個薪資帳戶轉出去付固定支出" : "", textContent: s.sIn ? "+"+fmt(s.sIn) : s.sOut ? "−"+fmt(s.sOut) : "—"}),
       el("td",{className:"n out-c"}, editableAmount(fmt(s.mOut), "", Math.round(s.mOut*100)/100, v => setMonthTotal(a.id, "out", v), {allowZero:true})),
       el("td",{className:"n",textContent:tr}),
+      el("td",{}, acctNote(a)),
       el("td",{}, el("div",{className:"rowbtns"}, eb, db))));
   }
   $("acctFoot").textContent="";
-  $("acctFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n",textContent:fmt(sum.bal)}), el("td",{className:"n in-c",textContent:fmt(sum.mIn)}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)}), el("td",{}), el("td",{})));
+  $("acctFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n",textContent:fmt(sum.bal)}), el("td",{className:"n in-c",textContent:fmt(sum.mIn)}), el("td",{className:"n",textContent: sum.sIn ? fmt(sum.sIn) : "—"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
   $("totalAssets").textContent = "NT$ " + fmt(sum.bal);
   $("totalAssets").className = "v" + (sum.bal<0?" out-c":"");
   $("totalNote").textContent = `${S.accounts.length} 個帳戶 · 截至 ${ym.y}/${pad(ym.m)} 月底`;
+}
+// 帳戶備註：點一下就能直接打字，存在帳戶資料裡（會同步）
+function acctNote(a){
+  const b = el("button",{type:"button",className:"acctnote"+(a.note?"":" empty"),textContent:a.note || "＋備註",title:"點一下修改備註"});
+  b.onclick = () => {
+    const inp = el("input",{type:"text",value:a.note||"",maxLength:40,placeholder:"例：生活費、扣房貸"});
+    inp.style.minWidth = "9em";
+    let done = false;
+    const fin = save => { if (done) return; done = true;
+      if (save){ const v = inp.value.trim(); if (v !== (a.note||"")){ S.accounts = S.accounts.map(x => x.id===a.id ? { ...x, note: v } : x); persist(); renderAll(); return; } }
+      inp.replaceWith(b); };
+    inp.onkeydown = e => { if (e.key==="Enter"){ e.preventDefault(); fin(true); } else if (e.key==="Escape") fin(false); };
+    inp.onblur = () => fin(true);
+    b.replaceWith(inp); inp.focus();
+  };
+  return b;
 }
 function resetAcForm(){ acEdit=null; $("acName").value=""; $("acInit").value=""; $("acFormTitle").textContent="新增帳戶"; $("acSubmit").textContent="新增帳戶"; $("acCancel").hidden=true; }
 $("acCancel").onclick = resetAcForm;
@@ -1046,9 +1072,35 @@ $("acForm").addEventListener("submit", e => {
 
 /* ---------- 固定收支 tab ---------- */
 function fixedDate(f){ const dim=new Date(ym.y,ym.m,0).getDate(); return `${ymKey()}-${pad(Math.min(f.day,dim))}`; }
-function fixedDone(f){ return S.entries.some(e=>e.fixedId===f.id && e.date.startsWith(ymKey())); }
+function fixedDone(f){ return S.entries.some(e=>e.fixedId===f.id && e.type===f.type && e.date.startsWith(ymKey())); }
+// 薪資帳戶：固定支出的錢從這裡轉到各扣款帳戶。沒設定時，自動挑名稱有「將來」或薪資收入最多的帳戶
+function salaryAcc(){
+  const set = S.accounts.find(a => a.salary);
+  if (set) return set.id;
+  if (set === undefined && S.accounts.some(a => a.salary === false)) return "";
+  const byName = S.accounts.find(a => /將來/.test(a.name)); if (byName) return byName.id;
+  const cnt = {}; for (const x of S.entries) if (x.type==="in" && x.category==="薪資") cnt[x.account] = (cnt[x.account]||0) + 1;
+  const top = Object.entries(cnt).sort((a,b)=>b[1]-a[1])[0];
+  return top ? top[0] : "";
+}
+function addSalaryTransfer(f, expense){
+  const from = salaryAcc();
+  if (f.type!=="out" || !from || !acc(from) || from===expense.account) return;
+  S.entries.push({ id:uid(), type:"transfer", category:"轉帳", amount:expense.amount, account:from, toAccount:expense.account, date:expense.date, note:`薪資轉入・${f.name}`, fixedId:f.id, salaryIn:true, linkId:expense.id, createdAt:Date.now() });
+}
 function postFixed(f){
-  S.entries.push({ id:uid(), type:f.type, category:f.category, amount:f.amount, account:acc(f.account)?f.account:S.accounts[0].id, date:fixedDate(f), note:f.name, fixedId:f.id, createdAt:Date.now() });
+  const x = { id:uid(), type:f.type, category:f.category, amount:f.amount, account:acc(f.account)?f.account:S.accounts[0].id, date:fixedDate(f), note:f.name, fixedId:f.id, createdAt:Date.now() };
+  S.entries.push(x);
+  addSalaryTransfer(f, x);
+}
+// 固定支出改了金額或日期時，對應的薪資轉入跟著改
+function syncLinked(x){ for (const t of S.entries) if (t.linkId===x.id && t.salaryIn){ t.amount = Math.abs(x.amount); t.date = x.date; if (x.account !== t.account) t.toAccount = x.account; t.updatedAt = Date.now(); } }
+// 這個月已記入、但還沒有薪資轉入的固定支出
+function missingSalary(){
+  const from = salaryAcc(), key = ymKey();
+  if (!from) return [];
+  return S.entries.filter(x => x.fixedId && x.type==="out" && x.date.startsWith(key) && x.account!==from
+    && !S.entries.some(t => t.salaryIn && t.linkId===x.id));
 }
 function renderFixed(){
   const list=$("fxList"); list.textContent="";
@@ -1074,7 +1126,24 @@ function renderFixed(){
   if (!items.length) list.append(el("div",{className:"empty-state"}, el("strong",{textContent:"還沒有固定項目"}), "在下方加入房租、保險、電信費、薪水這類每月固定的收支，之後每個月按一下就能記入。"));
   $("fxSummary").textContent = items.length ? `每月固定支出 NT$${fmt(outSum)}${inSum?` · 固定收入 NT$${fmt(inSum)}`:""} · 本月已記 ${done}/${items.length}` : "";
   $("fxPostAll").hidden = !items.length || done===items.length;
+  const sel = $("fxSalary"), cur = salaryAcc(); sel.textContent = "";
+  sel.append(new Option("不轉入（各帳戶自己扣款）", ""));
+  for (const a of S.accounts) sel.append(new Option(a.name, a.id));
+  sel.value = cur;
+  $("fxSalaryNote").textContent = cur ? `按「記入」時，會同時從 ${accName(cur)} 轉一筆同金額到扣款帳戶` : "";
+  const miss = missingSalary();
+  $("fxBackfill").hidden = !miss.length;
+  $("fxBackfill").textContent = `補上本月已記入項目的薪資轉入（${miss.length} 筆）`;
 }
+$("fxSalary").onchange = () => {
+  const v = $("fxSalary").value;
+  S.accounts = S.accounts.map(a => ({ ...a, salary: v ? a.id===v : false }));
+  persist(); renderAll();
+};
+$("fxBackfill").onclick = () => {
+  for (const x of missingSalary()){ const f = S.fixed.find(y => y.id===x.fixedId) || { type:"out", name:x.note, id:x.fixedId }; addSalaryTransfer(f, x); }
+  persist(); renderAll(); flash("已補上薪資轉入", false, "fxMsg");
+};
 $("fxPostAll").onclick = () => { S.fixed.filter(f=>!fixedDone(f)).forEach(postFixed); persist(); renderAll(); };
 function setFxType(t){
   fxType=t;
