@@ -202,6 +202,9 @@ tfoot td{font-weight:700;background:var(--bg)}
 .fxsalary{border-top:1px solid var(--line)}
 .fxcalc{border-bottom:1px solid var(--line)}
 .fxcalc.kpis{grid-template-columns:repeat(3,1fr)}
+.fxcalc.kpis.four{grid-template-columns:repeat(4,1fr)}
+@media (max-width:620px){.fxcalc.kpis.four{grid-template-columns:1fr 1fr}}
+.fxgroup{display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:var(--bg);border-top:1px solid var(--line);font-size:.8rem;color:var(--muted);letter-spacing:.08em}
 .fxinc{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .fxinc .lbl{font-size:.75rem;color:var(--muted);margin-right:2px}
 .fxinc .chip{font-size:.85rem;padding:4px 12px;display:inline-flex;gap:6px;align-items:baseline}
@@ -1153,7 +1156,7 @@ function setMonthIncome(kind, v){
 }
 // 勾選要算進來的收入分類（預設薪資＋油資），設定會同步
 const calcIncSel = () => Array.isArray(S.calcInc) ? S.calcInc : ["薪資","油資"];
-function renderFxCalc(outSum){
+function renderFxCalc(outSum, cardSum=0){
   const key = ymKey(), sel = calcIncSel();
   const incBox = $("fxInc"); incBox.textContent = "";
   incBox.append(el("span",{className:"lbl",textContent:"收入（點選要算進來的）"}));
@@ -1171,12 +1174,14 @@ function renderFxCalc(outSum){
     incBox.append(b);
   }
   const box = $("fxCalc"); box.textContent = "";
-  const left = total - outSum;
+  const left = total - outSum - cardSum;
   const tile = (k, v, cls, d) => el("div",{}, el("div",{className:"k",textContent:k}), el("div",{className:"v"}, el("span",{className:cls,textContent:fmt(v),style: k.includes("餘額") ? "font-weight:700" : ""})), el("div",{className:"d",textContent:d}));
   box.append(
     tile("收入合計", total, "in-c", sel.length ? sel.join("＋") : "還沒選收入"),
-    tile("－ 固定支出", outSum, "out-c", "每月固定支出合計"),
-    tile("＝ 餘額", left, left < 0 ? "out-c" : "in-c", estimated ? "薪資本月未記，以上月估算" : "收入合計－固定支出"));
+    tile("－ 固定支出", outSum, "out-c", cardSum ? "銀行扣款的固定支出" : "每月固定支出合計"),
+    ...(cardSum ? [tile("－ 信用卡", cardSum, "out-c", "信用卡扣款的固定支出")] : []),
+    tile("＝ 餘額", left, left < 0 ? "out-c" : "in-c", estimated ? "薪資本月未記，以上月估算" : cardSum ? "收入－固定支出－信用卡" : "收入合計－固定支出"));
+  box.classList.toggle("four", !!cardSum);
 }
 // 這個月已記入、但還沒有薪資轉入的固定支出
 function missingSalary(){
@@ -1187,11 +1192,19 @@ function missingSalary(){
 }
 function renderFixed(){
   const list=$("fxList"); list.textContent="";
-  const items=[...S.fixed].sort((a,b)=>a.day-b.day);
-  let outSum=0, inSum=0, done=0;
+  // 信用卡扣款的固定支出另外分一組
+  const cardF = f => f.type==="out" && isCard(f.account);
+  const items=[...S.fixed].sort((a,b)=> (cardF(a)-cardF(b)) || a.day-b.day);
+  let outSum=0, cardSum=0, inSum=0, done=0, group=null;
+  for (const f of items){ if (f.type!=="out") continue; if (cardF(f)) cardSum+=f.amount; else outSum+=f.amount; }
   for (const f of items){
     const isDone=fixedDone(f); if(isDone) done++;
-    if (f.type==="out") outSum+=f.amount; else inSum+=f.amount;
+    if (f.type!=="out") inSum+=f.amount;
+    const g = cardF(f) ? "card" : "bank";
+    if (g !== group && cardSum){
+      group = g;
+      list.append(el("div",{className:"fxgroup"}, el("span",{textContent: g==="card" ? "信用卡扣款" : "銀行扣款"}), el("span",{className:"amt out",textContent:"−"+fmt(g==="card" ? cardSum : outSum)})));
+    }
     const cls=f.type==="in"?"in":"out";
     const status = isDone ? el("span",{className:"done",textContent:"✓ 已記入"}) : el("button",{type:"button",className:"post",textContent:"記入"});
     if (!isDone) status.onclick = () => { postFixed(f); persist(); renderAll(); };
@@ -1208,7 +1221,7 @@ function renderFixed(){
   }
   if (!items.length) list.append(el("div",{className:"empty-state"}, el("strong",{textContent:"還沒有固定項目"}), "在下方加入房租、保險、電信費、薪水這類每月固定的收支，之後每個月按一下就能記入。"));
   $("fxSummary").textContent = items.length ? `本月已記 ${done}/${items.length}${inSum?` · 固定收入 NT$${fmt(inSum)}`:""}` : "";
-  renderFxCalc(outSum);
+  renderFxCalc(outSum, cardSum);
   $("fxPostAll").hidden = !items.length || done===items.length;
   const sel = $("fxSalary"), cur = salaryAcc(); sel.textContent = "";
   sel.append(new Option("不轉入（各帳戶自己扣款）", ""));
