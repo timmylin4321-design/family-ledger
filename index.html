@@ -418,6 +418,17 @@ tfoot td{font-weight:700;background:var(--bg)}
       </div>
     </section>
 
+    <section id="cardSection" hidden>
+      <h2><span style="white-space:nowrap">信用卡</span> <span class="edithint">卡費＝未繳＋固定支出，不列入本月支出</span></h2>
+      <div class="panel tablebox">
+        <table>
+          <thead><tr><th>帳戶</th><th class="n">本月卡費</th><th class="n">本月收入</th><th class="n">薪資轉入</th><th class="n">本月支出</th><th class="n">轉入／轉出</th><th>備註</th><th></th></tr></thead>
+          <tbody id="cardBody"></tbody>
+          <tfoot id="cardFoot"></tfoot>
+        </table>
+      </div>
+    </section>
+
     <section id="shareSection" hidden>
       <h2>共用這本帳 <span class="edithint" id="shareHint"></span></h2>
       <div class="panel">
@@ -442,7 +453,7 @@ tfoot td{font-weight:700;background:var(--bg)}
         <div class="fields">
           <label class="field"><span>帳戶名稱</span><input type="text" id="acName" maxlength="20" placeholder="例：台新薪轉、國泰數存、現金"></label>
           <label class="field"><span>期初餘額（開始記帳時的餘額）</span><input type="number" id="acInit" inputmode="decimal" step="1" placeholder="0"></label>
-          <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="acCard" style="width:auto"> 信用卡帳戶（本月支出以「月底未繳＋固定支出」計算）</label>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="acCard" style="width:auto"> 信用卡帳戶（另列信用卡表，以本月卡費計算）</label>
         </div>
         <div class="actions">
           <span class="formmsg" id="acMsg"></span>
@@ -1040,15 +1051,11 @@ function accountStats(id){
   return {bal,mIn,mOut,tIn,tOut,sIn,sOut};
 }
 function renderAccounts(){
-  const body=$("acctBody"); body.textContent="";
-  let sum={bal:0,mIn:0,mOut:0,sIn:0};
+  const body=$("acctBody"), cbody=$("cardBody"); body.textContent=""; cbody.textContent="";
+  let sum={bal:0,mIn:0,mOut:0,sIn:0}, csum={fee:0,mIn:0,mOut:0,sIn:0}, nBank=0, nCard=0;
   for (const a of S.accounts){
     const s=accountStats(a.id);
-    // 信用卡：本月支出＝月底未繳（餘額的負數）＋本月固定支出（薪資轉入）
-    if (a.card) s.cardOut = Math.max(0, -s.bal) + s.sIn;
-    sum.bal+=s.bal; sum.mIn+=s.mIn; sum.mOut += a.card ? s.cardOut : s.mOut; sum.sIn+=s.sIn;
     const nameBtn = el("button",{type:"button",className:"acctname",textContent:a.name,title:"查看此帳戶明細"});
-    if (a.card) nameBtn.append(el("span",{className:"tag tr",style:"margin-left:6px;font-size:.7rem;text-decoration:none;display:inline-block",textContent:"信用卡"}));
     nameBtn.onclick = () => { filterAcc=a.id; $("filterAcc").value=a.id; history.replaceState(null,"","#ledger"); showTab("ledger"); renderLedger(); };
     const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick = () => {
       acEdit=a.id; $("acName").value=a.name; $("acInit").value=a.init||0; $("acCard").checked=!!a.card;
@@ -1061,23 +1068,41 @@ function renderAccounts(){
       db.onclick = () => flash(S.accounts.length===1 ? "至少要保留一個帳戶。" : `這個帳戶還有 ${used} 筆紀錄或固定項目，無法刪除。`, true, "acMsg");
     } else db = delBtn("a:"+a.id, () => { S.accounts=S.accounts.filter(y=>y.id!==a.id); });
     const tr = s.tIn||s.tOut ? `+${fmt(s.tIn)} / −${fmt(s.tOut)}` : "—";
+    const salCell = el("td",{className:"n", style: s.sOut ? "color:var(--muted)" : "", title: s.sOut ? "從這個薪資帳戶轉出去付固定支出" : "", textContent: s.sIn ? "+"+fmt(s.sIn) : s.sOut ? "−"+fmt(s.sOut) : "—"});
+    const inCell = el("td",{className:"n in-c"}, editableAmount(fmt(s.mIn), "", Math.round(s.mIn*100)/100, v => setMonthTotal(a.id, "in", v), {allowZero:true}));
+    if (a.card){
+      // 信用卡：本月卡費＝月底未繳（餘額的負數）＋本月固定支出（薪資轉入）
+      const unpaid = Math.max(0, -s.bal), fee = unpaid + s.sIn; nCard++;
+      csum.fee+=fee; csum.mIn+=s.mIn; csum.mOut+=s.mOut; csum.sIn+=s.sIn;
+      cbody.append(el("tr",{},
+        el("td",{},nameBtn),
+        el("td",{className:"n out-c",style:"font-weight:700",title:`月底未繳 ${fmt(unpaid)}＋固定支出 ${fmt(s.sIn)}`}, fmt(fee), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(unpaid)}＋固定 ${fmt(s.sIn)}`})),
+        inCell, salCell,
+        el("td",{className:"n",style:"color:var(--muted)",title:"信用卡刷卡，不列入本月支出"}, fmt(s.mOut)),
+        el("td",{className:"n",textContent:tr}),
+        el("td",{}, acctNote(a)),
+        el("td",{}, el("div",{className:"rowbtns"}, eb, db))));
+      continue;
+    }
+    nBank++;
+    sum.bal+=s.bal; sum.mIn+=s.mIn; sum.mOut+=s.mOut; sum.sIn+=s.sIn;
     body.append(el("tr",{},
       el("td",{},nameBtn),
       el("td",{className:"n"+(s.bal<0?" out-c":""),style:"font-weight:700"}, editableAmount(fmt(s.bal), "", Math.round(s.bal*100)/100, v => setMonthEndBalance(a.id, v), {allowNegative:true, allowZero:true})),
-      el("td",{className:"n in-c"}, editableAmount(fmt(s.mIn), "", Math.round(s.mIn*100)/100, v => setMonthTotal(a.id, "in", v), {allowZero:true})),
-      el("td",{className:"n", style: s.sOut ? "color:var(--muted)" : "", title: s.sOut ? "從這個薪資帳戶轉出去付固定支出" : "", textContent: s.sIn ? "+"+fmt(s.sIn) : s.sOut ? "−"+fmt(s.sOut) : "—"}),
-      a.card
-        ? el("td",{className:"n out-c",title:`月底未繳 ${fmt(Math.max(0,-s.bal))}＋固定支出 ${fmt(s.sIn)}（本月刷卡 ${fmt(s.mOut)}）`}, fmt(s.cardOut), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(Math.max(0,-s.bal))}＋固定 ${fmt(s.sIn)}`}))
-        : el("td",{className:"n out-c"}, editableAmount(fmt(s.mOut), "", Math.round(s.mOut*100)/100, v => setMonthTotal(a.id, "out", v), {allowZero:true})),
+      inCell, salCell,
+      el("td",{className:"n out-c"}, editableAmount(fmt(s.mOut), "", Math.round(s.mOut*100)/100, v => setMonthTotal(a.id, "out", v), {allowZero:true})),
       el("td",{className:"n",textContent:tr}),
       el("td",{}, acctNote(a)),
       el("td",{}, el("div",{className:"rowbtns"}, eb, db))));
   }
   $("acctFoot").textContent="";
   $("acctFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n",textContent:fmt(sum.bal)}), el("td",{className:"n in-c",textContent:fmt(sum.mIn)}), el("td",{className:"n",textContent: sum.sIn ? fmt(sum.sIn) : "—"}), el("td",{className:"n out-c",textContent:fmt(sum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
+  $("cardSection").hidden = !nCard;
+  $("cardFoot").textContent="";
+  if (nCard) $("cardFoot").append(el("tr",{}, el("td",{textContent:"合計"}), el("td",{className:"n out-c",textContent:fmt(csum.fee)}), el("td",{className:"n in-c",textContent:fmt(csum.mIn)}), el("td",{className:"n",textContent: csum.sIn ? fmt(csum.sIn) : "—"}), el("td",{className:"n",style:"color:var(--muted)",textContent:fmt(csum.mOut)}), el("td",{}), el("td",{}), el("td",{})));
   $("totalAssets").textContent = "NT$ " + fmt(sum.bal);
   $("totalAssets").className = "v" + (sum.bal<0?" out-c":"");
-  $("totalNote").textContent = `${S.accounts.length} 個帳戶 · 截至 ${ym.y}/${pad(ym.m)} 月底`;
+  $("totalNote").textContent = `${nBank} 個帳戶${nCard ? `（不含 ${nCard} 張信用卡，本月卡費 NT$${fmt(csum.fee)}）` : ""} · 截至 ${ym.y}/${pad(ym.m)} 月底`;
 }
 // 帳戶備註：點一下就能直接打字，存在帳戶資料裡（會同步）
 function acctNote(a){
