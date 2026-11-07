@@ -439,7 +439,7 @@ tfoot td{font-weight:700;background:var(--bg)}
         <div class="fields">
           <label class="field"><span>帳戶名稱</span><input type="text" id="acName" maxlength="20" placeholder="例：台新薪轉、國泰數存、現金"></label>
           <label class="field"><span>期初餘額（開始記帳時的餘額）</span><input type="number" id="acInit" inputmode="decimal" step="1" placeholder="0"></label>
-          <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="acCard" style="width:auto"> 信用卡帳戶（刷卡不列入本月支出，繳卡費時才算）</label>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="acCard" style="width:auto"> 信用卡帳戶（本月支出以「月底未繳＋固定支出」計算）</label>
         </div>
         <div class="actions">
           <span class="formmsg" id="acMsg"></span>
@@ -739,7 +739,7 @@ function fixFuelEntries(){
 }
 // 信用卡帳戶：刷卡的支出不列入本月支出（繳卡費時才算），避免重複計算
 const isCard = id => !!(acc(id) && acc(id).card);
-const countsOut = x => x.type==="out" && !isCard(x.account);
+const countsOut = x => x.type==="out";   // 信用卡刷卡也算本月支出（帳戶總覽以「月底餘額＋固定支出」呈現）
 function markCards(){
   if (S.accounts.some(a => "card" in a)) return false;
   let n = 0;
@@ -1002,7 +1002,7 @@ function renderLedger(){
       let sign = x.type==="in"?(neg?"−":"+"):x.type==="out"?(neg?"+":"−"):x.type==="adjust"?((x.sign||1)>0?"+":"−"):"⇄ ";
       let amtCls = cls;
       if (x.type==="transfer" && filterAcc){ const incoming = x.toAccount===filterAcc; sign = incoming?"+":"−"; amtCls = incoming?"in":"out"; }
-      const sub = x.type==="transfer" ? `${accName(x.account)} → ${accName(x.toAccount)}` : accName(x.account) + (x.type==="out" && isCard(x.account) ? " · 刷卡（不計入支出）" : "") + (x.fixedId?" · 固定":"") + (fuelEff(x) ? " · " + fuelText(x) : "");
+      const sub = x.type==="transfer" ? `${accName(x.account)} → ${accName(x.toAccount)}` : accName(x.account) + (x.type==="out" && isCard(x.account) ? " · 刷卡" : "") + (x.fixedId?" · 固定":"") + (fuelEff(x) ? " · " + fuelText(x) : "");
       const note = el("span",{className:"note"}, el("span",{textContent:x.note || (x.type==="transfer"?"轉帳":"—")}), el("small",{textContent:sub}));
       const eb = el("button",{type:"button",textContent:"編輯"}); eb.onclick=()=>startEdit(x);
       if (x.type==="adjust") eb.hidden = true;
@@ -1040,7 +1040,10 @@ function renderAccounts(){
   const body=$("acctBody"); body.textContent="";
   let sum={bal:0,mIn:0,mOut:0,sIn:0};
   for (const a of S.accounts){
-    const s=accountStats(a.id); sum.bal+=s.bal; sum.mIn+=s.mIn; if (!a.card) sum.mOut+=s.mOut; sum.sIn+=s.sIn;
+    const s=accountStats(a.id);
+    // 信用卡：本月支出＝月底未繳（餘額的負數）＋本月固定支出（薪資轉入）
+    if (a.card) s.cardOut = Math.max(0, -s.bal) + s.sIn;
+    sum.bal+=s.bal; sum.mIn+=s.mIn; sum.mOut += a.card ? s.cardOut : s.mOut; sum.sIn+=s.sIn;
     const nameBtn = el("button",{type:"button",className:"acctname",textContent:a.name,title:"查看此帳戶明細"});
     if (a.card) nameBtn.append(el("span",{className:"tag tr",style:"margin-left:6px;font-size:.7rem;text-decoration:none;display:inline-block",textContent:"信用卡"}));
     nameBtn.onclick = () => { filterAcc=a.id; $("filterAcc").value=a.id; history.replaceState(null,"","#ledger"); showTab("ledger"); renderLedger(); };
@@ -1061,7 +1064,7 @@ function renderAccounts(){
       el("td",{className:"n in-c"}, editableAmount(fmt(s.mIn), "", Math.round(s.mIn*100)/100, v => setMonthTotal(a.id, "in", v), {allowZero:true})),
       el("td",{className:"n", style: s.sOut ? "color:var(--muted)" : "", title: s.sOut ? "從這個薪資帳戶轉出去付固定支出" : "", textContent: s.sIn ? "+"+fmt(s.sIn) : s.sOut ? "−"+fmt(s.sOut) : "—"}),
       a.card
-        ? el("td",{className:"n",style:"color:var(--muted)",title:"信用卡刷卡不列入本月支出，繳卡費時才算"}, el("small",{textContent:"刷卡 "}), fmt(s.mOut))
+        ? el("td",{className:"n out-c",title:`月底未繳 ${fmt(Math.max(0,-s.bal))}＋固定支出 ${fmt(s.sIn)}（本月刷卡 ${fmt(s.mOut)}）`}, fmt(s.cardOut), el("div",{style:"font-size:.7rem;color:var(--muted);font-weight:400",textContent:`未繳 ${fmt(Math.max(0,-s.bal))}＋固定 ${fmt(s.sIn)}`}))
         : el("td",{className:"n out-c"}, editableAmount(fmt(s.mOut), "", Math.round(s.mOut*100)/100, v => setMonthTotal(a.id, "out", v), {allowZero:true})),
       el("td",{className:"n",textContent:tr}),
       el("td",{}, acctNote(a)),
