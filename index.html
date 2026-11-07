@@ -201,6 +201,12 @@ tfoot td{font-weight:700;background:var(--bg)}
 .acctnote.empty{opacity:.5}
 .fxsalary{border-top:1px solid var(--line)}
 .fxcalc{border-bottom:1px solid var(--line)}
+.fxcalc.kpis{grid-template-columns:repeat(3,1fr)}
+.fxinc{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fxinc .lbl{font-size:.75rem;color:var(--muted);margin-right:2px}
+.fxinc .chip{font-size:.85rem;padding:4px 12px;display:inline-flex;gap:6px;align-items:baseline}
+.fxinc .chip .a{font-family:var(--f-num);font-variant-numeric:tabular-nums}
+.fxinc .chip small{color:var(--muted);font-size:.7rem}
 .fxcalc .k{font-size:.8rem;color:var(--muted)}
 .fxcalc .d{font-size:.72rem;color:var(--muted)}
 .acctname{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:500}
@@ -526,7 +532,8 @@ tfoot td{font-weight:700;background:var(--bg)}
     <section>
       <h2>本月固定收支 <span class="edithint">點金額可直接修改</span></h2>
       <div class="panel">
-        <div class="kpis kpis4 fxcalc" id="fxCalc"></div>
+        <div class="chips fxinc" id="fxInc" role="group" aria-label="要算進來的收入"></div>
+        <div class="kpis fxcalc" id="fxCalc"></div>
         <div class="fxhead">
           <span id="fxSummary" style="font-size:.9rem"></span>
           <button class="primary small" type="button" id="fxPostAll">未記入的全部記入</button>
@@ -608,6 +615,7 @@ try {
   for (const k of ["entries","accounts","fixed"]) if (Array.isArray(s[k])) S[k] = s[k];
   S.subcats = s.subcats && typeof s.subcats === "object" ? s.subcats : null;
   S.budget = +s.budget || 0;
+  if (Array.isArray(s.calcInc)) S.calcInc = s.calcInc;
 } catch {}
 if (!S.accounts.length) S.accounts = [{ id:uid(), name:"現金", init:0 }];
 const acc = id => S.accounts.find(a => a.id===id);
@@ -1140,17 +1148,32 @@ function setMonthIncome(kind, v){
   const account = salaryAcc() || S.accounts[0].id, dim = new Date(ym.y, ym.m, 0).getDate();
   S.entries.push({ id:uid(), type:"in", category: kind==="fuel" ? "油資" : "薪資", amount:v, account, date:`${key}-${pad(Math.min(5, dim))}`, note: kind==="fuel" ? "油資補助" : "薪水", createdAt:Date.now() });
 }
+// 勾選要算進來的收入分類（預設薪資＋油資），設定會同步
+const calcIncSel = () => Array.isArray(S.calcInc) ? S.calcInc : ["薪資","油資"];
 function renderFxCalc(outSum){
+  const key = ymKey(), sel = calcIncSel();
+  const incBox = $("fxInc"); incBox.textContent = "";
+  incBox.append(el("span",{className:"lbl",textContent:"收入（點選要算進來的）"}));
+  let total = 0, estimated = false;
+  for (const c of CATS.in){
+    const test = c === "油資" ? isFuelPay : c === "薪資" ? (x => x.category==="薪資" && !isFuelPay(x)) : (x => x.category===c && !isFuelPay(x));
+    let amt = monthIncome(key, test), note = "";
+    if (!amt && c === "薪資"){ const r = lastIncome(test); if (r.ref){ amt = r.amt; note = r.note.replace("本月未記，", ""); } }
+    const on = sel.includes(c);
+    if (!amt && !on) continue;
+    if (on){ total += amt; if (note) estimated = true; }
+    const b = el("button",{type:"button",className:"chip"}, c, el("span",{className:"a",textContent:fmt(amt)}), note ? el("small",{textContent:note}) : "");
+    b.setAttribute("aria-pressed", String(on));
+    b.onclick = () => { S.calcInc = on ? sel.filter(x => x !== c) : [...sel, c]; persist(); renderFixed(); };
+    incBox.append(b);
+  }
   const box = $("fxCalc"); box.textContent = "";
-  const sal = lastIncome(x => x.category==="薪資" && !isFuelPay(x)), fuel = lastIncome(isFuelPay);
-  const fuelAmt = fuel.ref ? 0 : fuel.amt;   // 油資不是每月都有：本月沒記就算 0
-  const left = sal.amt + fuelAmt - outSum;
-  const tile = (k, valEl, d) => el("div",{}, el("div",{className:"k",textContent:k}), el("div",{className:"v"}, valEl), el("div",{className:"d",textContent:d}));
+  const left = total - outSum;
+  const tile = (k, v, cls, d) => el("div",{}, el("div",{className:"k",textContent:k}), el("div",{className:"v"}, el("span",{className:cls,textContent:fmt(v),style: k.includes("餘額") ? "font-weight:700" : ""})), el("div",{className:"d",textContent:d}));
   box.append(
-    tile("薪資", editableAmount(fmt(sal.amt), "in-c", sal.amt, v => setMonthIncome("salary", v), {allowZero:true}), sal.ref ? sal.note : "本月・點金額可修改"),
-    tile("＋ 油資", editableAmount(fmt(fuelAmt), "in-c", fuelAmt, v => setMonthIncome("fuel", v), {allowZero:true}), fuel.ref ? `本月未記（上次 ${fmt(fuel.amt)}）` : fuel.amt ? "本月・點金額可修改" : "本月未記・點金額可輸入"),
-    tile("－ 固定支出", el("span",{className:"out-c",textContent:fmt(outSum)}), "每月固定支出合計"),
-    tile("＝ 餘額", el("span",{className: left < 0 ? "out-c" : "in-c", style:"font-weight:700", textContent:fmt(left)}), sal.ref ? "薪資以上月估算" : "薪資＋油資－固定支出"));
+    tile("收入合計", total, "in-c", sel.length ? sel.join("＋") : "還沒選收入"),
+    tile("－ 固定支出", outSum, "out-c", "每月固定支出合計"),
+    tile("＝ 餘額", left, left < 0 ? "out-c" : "in-c", estimated ? "薪資本月未記，以上月估算" : "收入合計－固定支出"));
 }
 // 這個月已記入、但還沒有薪資轉入的固定支出
 function missingSalary(){
@@ -1659,7 +1682,7 @@ const cloud = { on:false, user:null, db:null, ledgerId:null, ledger:null, list:[
   synced:new Map(), syncedMeta:"", ready:false, pending:false, fromCache:false, uploadLocal:null, msg:"", bad:false, showLogin:false };
 const LEDGER_KEY = KEY + "-ledger", BACKUP_KEY = KEY + "-before-cloud";
 const clean = o => JSON.parse(JSON.stringify(o));
-const metaObj = () => clean({ accounts:S.accounts, fixed:S.fixed, budget:+S.budget||0, subcats:S.subcats||{} });
+const metaObj = () => clean({ accounts:S.accounts, fixed:S.fixed, budget:+S.budget||0, subcats:S.subcats||{}, ...(S.calcInc ? { calcInc:S.calcInc } : {}) });
 const metaJSON = () => JSON.stringify(metaObj());
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k,v) => { try { v==null ? localStorage.removeItem(k) : localStorage.setItem(k,v); } catch {} };
@@ -1721,6 +1744,7 @@ function subscribe(id){
     S.fixed = Array.isArray(d.fixed) ? d.fixed : [];
     S.budget = +d.budget || 0;
     S.subcats = d.subcats && typeof d.subcats === "object" && !Array.isArray(d.subcats) ? d.subcats : null;
+    S.calcInc = Array.isArray(d.calcInc) ? d.calcInc : undefined;
     cloud.syncedMeta = metaJSON();
     gotMeta = true; done();
   }, e => { stopSync(); cloudErr(e); }));
